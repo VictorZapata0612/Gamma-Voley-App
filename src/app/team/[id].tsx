@@ -1,5 +1,5 @@
-import { router, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { useCallback, useState } from "react";
 import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
 import {
@@ -11,6 +11,7 @@ import {
   type PlayerRecord,
   type TeamRecord,
 } from "@/database/repositories";
+import { goBack } from "@/utils/navigation";
 
 const NEXT_ELIGIBILITY: Record<PlayerRecord["eligibility"], PlayerRecord["eligibility"]> = {
   pending_review: "eligible",
@@ -70,16 +71,18 @@ export default function TeamDetailScreen() {
     }
   }
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
-  }, [load]);
+  // Reload on focus so returning from a form shows the saved data
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
   async function removeTeam() {
     if (!teamId) return;
     try {
       await deleteTeam(db, teamId);
-      router.back();
+      goBack("/teams");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No se pudo eliminar el equipo.");
     }
@@ -98,7 +101,7 @@ export default function TeamDetailScreen() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.errorState}>
           <Text style={styles.error}>{error ?? "No se encontró el equipo."}</Text>
-          <Pressable onPress={() => router.back()} style={styles.secondary}>
+          <Pressable onPress={() => goBack("/teams")} style={styles.secondary}>
             <Text style={styles.secondaryText}>Volver a equipos</Text>
           </Pressable>
         </View>
@@ -115,7 +118,7 @@ export default function TeamDetailScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver a equipos" onPress={() => router.back()}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Volver a equipos" onPress={() => goBack("/teams")}>
           <Text style={styles.back}>‹ Equipos</Text>
         </Pressable>
 

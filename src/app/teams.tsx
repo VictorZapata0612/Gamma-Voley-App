@@ -1,9 +1,10 @@
-import { router } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import { listTeamRecords, type TeamRecord } from "@/database/repositories";
+import { goBack } from "@/utils/navigation";
 
 export default function TeamsScreen() {
   const db = useSQLiteContext();
@@ -19,10 +20,12 @@ export default function TeamsScreen() {
     }
   }, [db]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
-  }, [load]);
+  // Reload on focus so returning from a form shows the saved data
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
   const maxTeams = 8;
   const isFull = teams.length >= maxTeams;
@@ -30,7 +33,7 @@ export default function TeamsScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => router.back()}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => goBack("/")}>
           <Text style={styles.back}>‹ Inicio</Text>
         </Pressable>
 

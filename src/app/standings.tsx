@@ -17,6 +17,7 @@ import {
   type TeamRecord,
 } from "@/database/repositories";
 import type { StandingRow } from "@/domain/types";
+import { goBack } from "@/utils/navigation";
 
 export default function StandingsScreen() {
   const db = useSQLiteContext();
@@ -257,7 +258,7 @@ export default function StandingsScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => router.back()}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => goBack("/")}>
           <Text style={styles.back}>‹ Inicio</Text>
         </Pressable>
 

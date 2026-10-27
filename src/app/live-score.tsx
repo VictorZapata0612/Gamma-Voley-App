@@ -1,4 +1,4 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
@@ -12,6 +12,7 @@ import {
   type ScoreEventRecord,
 } from "@/database/repositories";
 import { getTimeoutSetNumber, toDisplaySetScore } from "@/domain/rules";
+import { goBack } from "@/utils/navigation";
 
 export default function LiveScoreScreen() {
   const db = useSQLiteContext();
@@ -159,7 +160,7 @@ export default function LiveScoreScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver al calendario" onPress={() => router.back()}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Volver al calendario" onPress={() => goBack("/calendar")}>
           <Text style={styles.back}>‹ Calendario</Text>
         </Pressable>
 

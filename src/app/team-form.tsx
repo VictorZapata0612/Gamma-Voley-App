@@ -1,9 +1,10 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import { getTeamRecord, saveTeamRecord } from "@/database/repositories";
+import { goBack } from "@/utils/navigation";
 
 export default function TeamFormScreen() {
   const db = useSQLiteContext();
@@ -16,11 +17,11 @@ export default function TeamFormScreen() {
   async function submit() {
     try {
       await saveTeamRecord(db, { id: id ?? `team-${Date.now()}`, tournamentId: DEFAULT_TOURNAMENT_ID, name, captainName: captain || null, contact: contact || null, registrationStatus: "pending", paymentStatus: "pending" });
-      router.back();
+      goBack("/teams");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "No se pudo guardar el equipo."); }
   }
   return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.container}>
-    <Pressable onPress={() => router.back()}><Text style={styles.back}>‹ Equipos</Text></Pressable>
+    <Pressable onPress={() => goBack("/teams")}><Text style={styles.back}>‹ Equipos</Text></Pressable>
     <Text style={styles.eyebrow}>NUEVO REGISTRO</Text><Text style={styles.title}>{id ? "Editar equipo" : "Registrar equipo"}</Text>
     <Field label="Nombre del equipo" value={name} onChangeText={setName} placeholder="Ej. Gamma Voley A" />
     <Field label="Capitán o contacto" value={captain} onChangeText={setCaptain} placeholder="Nombre del contacto" />

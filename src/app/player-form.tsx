@@ -1,8 +1,9 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
 import { getPlayer, savePlayer, type PlayerRecord } from "@/database/repositories";
+import { goBack } from "@/utils/navigation";
 
 export default function PlayerFormScreen() {
   const db = useSQLiteContext();
@@ -11,9 +12,9 @@ export default function PlayerFormScreen() {
   useEffect(() => { if (id) void getPlayer(db, id).then((player) => { if (player) { setName(player.name); setGender(player.gender); setJersey(player.jerseyNumber?.toString() ?? ""); } }); }, [db, id]);
   async function submit() {
     const player: PlayerRecord = { id: id ?? `player-${Date.now()}`, teamId, name, gender, jerseyNumber: jersey ? Number(jersey) : null, eligibility: "pending_review" };
-    try { await savePlayer(db, player); router.back(); } catch (reason) { setError(reason instanceof Error ? reason.message : "No se pudo guardar el jugador."); }
+    try { await savePlayer(db, player); goBack({ pathname: "/team/[id]", params: { id: teamId } }); } catch (reason) { setError(reason instanceof Error ? reason.message : "No se pudo guardar el jugador."); }
   }
-  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.container}><Pressable onPress={() => router.back()}><Text style={styles.back}>‹ Equipo</Text></Pressable><Text style={styles.eyebrow}>PLANTILLA</Text><Text style={styles.title}>{id ? "Editar jugador" : "Registrar jugador"}</Text>
+  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.container}><Pressable onPress={() => goBack({ pathname: "/team/[id]", params: { id: teamId } })}><Text style={styles.back}>‹ Equipo</Text></Pressable><Text style={styles.eyebrow}>PLANTILLA</Text><Text style={styles.title}>{id ? "Editar jugador" : "Registrar jugador"}</Text>
     <Text style={styles.label}>Nombre del jugador</Text><TextInput value={name} onChangeText={setName} placeholder="Nombre completo" placeholderTextColor="#70737C" style={styles.input} />
     <Text style={styles.label}>Sexo deportivo requerido para la regla de cancha</Text><View style={styles.options}><Option label="Mujer" selected={gender === "female"} onPress={() => setGender("female")} /><Option label="Hombre" selected={gender === "male"} onPress={() => setGender("male")} /></View>
     <Text style={styles.label}>Número de camiseta (opcional)</Text><TextInput value={jersey} onChangeText={setJersey} keyboardType="number-pad" placeholder="Número" placeholderTextColor="#70737C" style={styles.input} />

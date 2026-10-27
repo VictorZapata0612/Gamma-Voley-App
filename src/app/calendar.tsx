@@ -9,6 +9,7 @@ import {
   type CalendarMatchRecord,
   type KnockoutMatchRecord,
 } from "@/database/repositories";
+import { goBack } from "@/utils/navigation";
 
 export default function CalendarScreen() {
   const db = useSQLiteContext();
@@ -55,7 +56,7 @@ export default function CalendarScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver a grupos" onPress={() => router.back()}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Volver a grupos" onPress={() => goBack("/groups")}>
           <Text style={styles.back}>‹ Grupos y Tabla</Text>
         </Pressable>
 

@@ -1,9 +1,9 @@
 import type { SQLiteDatabase } from "expo-sqlite";
 import type { GroupId, Match, MatchResult, ScoreAction, SemifinalBracket, SetScore, Team, TimeoutState } from "@/domain/types";import type { Player } from "@/domain/eligibility";
-import { MAX_ROSTER_SIZE } from "@/domain/eligibility";
 import type { ScheduledGroupMatch } from "@/domain/schedule";
-import { canCloseSet, isOfficialMatchComplete } from "@/domain/liveScoring";
-import { getGroupMatchWinner, getKnockoutMatchWinner } from "@/domain/rules";
+import { deriveMatchProgress, type MatchProgress } from "@/domain/liveScoring";
+import { getTimeoutSetNumber } from "@/domain/rules";
+import { walkoverSets } from "@/domain/walkover";
 
 type TeamRow = {
   id: string;
@@ -170,7 +170,7 @@ export async function getLiveMatch(db: SQLiteDatabase, matchId: string): Promise
   const timeoutRows = await db.getAllAsync<{ team: "home" | "away" }>(
     "SELECT team FROM timeouts WHERE match_id = ? AND set_number = ?",
     matchId,
-    match.currentSet
+    getTimeoutSetNumber(match.phase, match.currentSet)
   );
   const timeouts: TimeoutState = {
     homeUsed: timeoutRows.some((r) => r.team === "home"),
@@ -209,40 +209,23 @@ export async function getLiveMatch(db: SQLiteDatabase, matchId: string): Promise
 }
 
 export async function recordLiveScoreAction(db: SQLiteDatabase, matchId: string, action: ScoreAction): Promise<LiveMatchRecord> {
-  const match = await getLiveMatch(db, matchId);
-  if (!match) throw new Error("El partido no existe.");
-  if (match.status === "completed" || match.status === "walkover") throw new Error("El partido ya está cerrado; requiere una corrección administrativa.");
-  const setNumber = match.currentSet;
-  const current = match.sets[setNumber - 1];
-  if (!current) throw new Error("El set actual no está inicializado.");
-  const next = { ...current, [action.team]: current[action.team] + action.delta };
-  if (next.home < 0 || next.away < 0) throw new Error("El marcador no puede ser negativo.");
+  // Read inside the transaction so the score is never computed from a stale snapshot
   await db.execAsync("BEGIN TRANSACTION;");
   try {
+    const match = await getLiveMatch(db, matchId);
+    if (!match) throw new Error("El partido no existe.");
+    if (match.status === "completed" || match.status === "walkover") throw new Error("El partido ya está cerrado; requiere una corrección administrativa.");
+    const setNumber = match.currentSet;
+    const current = match.sets[setNumber - 1];
+    if (!current) throw new Error("El set actual no está inicializado.");
+    const next = { ...current, [action.team]: current[action.team] + action.delta };
+    if (next.home < 0 || next.away < 0) throw new Error("El marcador no puede ser negativo.");
     const now = new Date().toISOString();
     await db.runAsync("INSERT INTO score_events (id, match_id, set_number, team, delta, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", action.id, matchId, setNumber, action.team, action.delta, action.reason ?? null, now);
-    await db.runAsync(`UPDATE match_sets SET ${action.team === "home" ? "home_points" : "away_points"} = ? WHERE match_id = ? AND set_number = ?`, next[action.team], matchId, setNumber);
-    await db.runAsync("UPDATE matches SET status = 'in_progress', updated_at = ? WHERE id = ? AND status = 'scheduled'", now, matchId);
+    const column = action.team === "home" ? "home_points" : "away_points";
+    await db.runAsync(`UPDATE match_sets SET ${column} = ${column} + ? WHERE match_id = ? AND set_number = ?`, action.delta, matchId, setNumber);
     const updatedSets = match.sets.map((set, index) => index === setNumber - 1 ? next : set);
-    if (canCloseSet(match.phase, setNumber, next, updatedSets.slice(0, setNumber - 1))) {
-      await db.runAsync("UPDATE match_sets SET closed_at = ? WHERE match_id = ? AND set_number = ?", now, matchId, setNumber);
-      if (isOfficialMatchComplete(match.phase, updatedSets)) {
-        const winner = match.phase === "group" ? getGroupMatchWinner(updatedSets) : getKnockoutMatchWinner(updatedSets);
-        await db.runAsync("UPDATE matches SET status = 'completed', winner = ?, updated_at = ? WHERE id = ?", winner, now, matchId);
-      } else if (match.phase === "group") {
-        if (setNumber === 1) {
-          await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES (?, 2, 0, 0)", matchId);
-          await db.runAsync("UPDATE matches SET current_set = 2, updated_at = ? WHERE id = ?", now, matchId);
-        }
-        // En fase de grupos nunca se crea un tercer set; si no ha finalizado, el set 2 continúa en prolongación
-      } else {
-        const newSetNumber = setNumber + 1;
-        if (newSetNumber <= 3) {
-          await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES (?, ?, 0, 0)", matchId, newSetNumber);
-          await db.runAsync("UPDATE matches SET current_set = ?, updated_at = ? WHERE id = ?", newSetNumber, now, matchId);
-        }
-      }
-    }
+    await syncMatchProgress(db, matchId, match.phase, updatedSets, now);
     await enqueueSyncOperation(db, `sync-${action.id}`, "match", matchId, "record_score_action", {
       actionId: action.id,
       setNumber,
@@ -261,30 +244,74 @@ export async function recordLiveScoreAction(db: SQLiteDatabase, matchId: string,
   return updated;
 }
 
+// Keeps set rows, closed sets, current set, status and winner consistent with the set scores
+async function syncMatchProgress(
+  db: SQLiteDatabase,
+  matchId: string,
+  phase: Match["phase"],
+  sets: SetScore[],
+  now: string
+): Promise<MatchProgress> {
+  const progress = deriveMatchProgress(phase, sets);
+  const orphan = sets.findIndex((set, index) => index >= progress.setCount && (set.home > 0 || set.away > 0));
+  if (orphan >= 0) {
+    const label = phase === "group" && orphan === 2 ? "la prolongación" : `el set ${orphan + 1}`;
+    throw new Error(`Esta corrección deja sin efecto ${label}, que tiene puntos. Corrige primero ${label} a 0-0.`);
+  }
+  await db.runAsync("DELETE FROM match_sets WHERE match_id = ? AND set_number > ?", matchId, progress.setCount);
+  for (let setNumber = 1; setNumber <= progress.setCount; setNumber += 1) {
+    await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES (?, ?, 0, 0)", matchId, setNumber);
+    if (setNumber < progress.setCount || progress.winner) {
+      await db.runAsync("UPDATE match_sets SET closed_at = COALESCE(closed_at, ?) WHERE match_id = ? AND set_number = ?", now, matchId, setNumber);
+    } else {
+      await db.runAsync("UPDATE match_sets SET closed_at = NULL WHERE match_id = ? AND set_number = ?", matchId, setNumber);
+    }
+  }
+  await db.runAsync(
+    "UPDATE matches SET status = ?, winner = ?, current_set = ?, updated_at = ? WHERE id = ?",
+    progress.winner ? "completed" : "in_progress",
+    progress.winner,
+    progress.setCount,
+    now,
+    matchId
+  );
+  return progress;
+}
+
+// A result that already fed a later round cannot change silently: the later round must not have started
+async function assertNoStartedDependents(db: SQLiteDatabase, matchId: string, phase: Match["phase"]): Promise<void> {
+  if (phase === "group") {
+    const semifinal = await db.getFirstAsync<{ id: string }>("SELECT id FROM matches WHERE id IN ('sf-1', 'sf-2') LIMIT 1");
+    if (semifinal) throw new Error("Las semifinales ya fueron generadas con esta clasificación; los resultados de grupos quedan cerrados.");
+    return;
+  }
+  if (matchId === "sf-1" || matchId === "sf-2") {
+    const final = await db.getFirstAsync<{ status: string }>("SELECT status FROM matches WHERE id = 'final'");
+    if (final && final.status !== "scheduled") throw new Error("La final ya comenzó con este resultado; no se puede corregir la semifinal.");
+  }
+}
+
 export async function recordAdministrativeCorrection(db: SQLiteDatabase, matchId: string, action: ScoreAction): Promise<LiveMatchRecord> {
   if (!action.reason?.trim()) throw new Error("La corrección requiere un motivo.");
-  const match = await getLiveMatch(db, matchId);
-  if (!match) throw new Error("El partido no existe.");
-  const setNumber = action.setNumber ?? match.currentSet;
-  const current = match.sets[setNumber - 1];
-  if (!current) throw new Error(`El set ${setNumber} no existe o no está inicializado.`);
-  const next = { ...current, [action.team]: current[action.team] + action.delta };
-  if (next.home < 0 || next.away < 0) throw new Error("La corrección no puede dejar el marcador negativo.");
   await db.execAsync("BEGIN TRANSACTION;");
   try {
+    const match = await getLiveMatch(db, matchId);
+    if (!match) throw new Error("El partido no existe.");
+    if (match.status === "walkover") throw new Error("Un partido definido por W.O. no tiene marcador que corregir.");
+    await assertNoStartedDependents(db, matchId, match.phase);
+    const setNumber = action.setNumber ?? match.currentSet;
+    const current = match.sets[setNumber - 1];
+    if (!current) throw new Error(`El set ${setNumber} no existe o no está inicializado.`);
+    const next = { ...current, [action.team]: current[action.team] + action.delta };
+    if (next.home < 0 || next.away < 0) throw new Error("La corrección no puede dejar el marcador negativo.");
     const now = new Date().toISOString();
     await db.runAsync("INSERT INTO score_events (id, match_id, set_number, team, delta, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", action.id, matchId, setNumber, action.team, action.delta, action.reason, now);
-    await db.runAsync(`UPDATE match_sets SET ${action.team === "home" ? "home_points" : "away_points"} = ? WHERE match_id = ? AND set_number = ?`, next[action.team], matchId, setNumber);
+    const column = action.team === "home" ? "home_points" : "away_points";
+    await db.runAsync(`UPDATE match_sets SET ${column} = ${column} + ? WHERE match_id = ? AND set_number = ?`, action.delta, matchId, setNumber);
     const sets = match.sets.map((set, index) => index === setNumber - 1 ? next : set);
-    const isComplete = isOfficialMatchComplete(match.phase, sets);
-    const winner = isComplete
-      ? match.phase === "group"
-        ? getGroupMatchWinner(sets)
-        : getKnockoutMatchWinner(sets)
-      : null;
-    const nextStatus = isComplete ? "completed" : "in_progress";
-    await db.runAsync("UPDATE matches SET status = ?, winner = ?, updated_at = ? WHERE id = ?", nextStatus, winner, now, matchId);
-    await db.runAsync("INSERT INTO audit_log (id, entity_type, entity_id, action, details_json, created_at) VALUES (?, 'match', ?, 'score_correction', ?, ?)", `audit-${action.id}`, matchId, JSON.stringify({ ...action, setNumber, previous: current, next }), now);
+    const progress = await syncMatchProgress(db, matchId, match.phase, sets, now);
+    const nextStatus = progress.winner ? "completed" : "in_progress";
+    await db.runAsync("INSERT INTO audit_log (id, entity_type, entity_id, action, details_json, created_at) VALUES (?, 'match', ?, 'score_correction', ?, ?)", `audit-${action.id}`, matchId, JSON.stringify({ ...action, setNumber, previous: current, next, previousStatus: match.status, previousWinner: match.winner, nextStatus, winner: progress.winner }), now);
     await enqueueSyncOperation(db, `sync-${action.id}`, "match", matchId, "score_correction", {
       actionId: action.id,
       setNumber,
@@ -293,7 +320,7 @@ export async function recordAdministrativeCorrection(db: SQLiteDatabase, matchId
       reason: action.reason,
       score: next,
       status: nextStatus,
-      winner,
+      winner: progress.winner,
       timestamp: now,
     });
     await db.execAsync("COMMIT;");
@@ -303,6 +330,45 @@ export async function recordAdministrativeCorrection(db: SQLiteDatabase, matchId
   }
   const updated = await getLiveMatch(db, matchId);
   if (!updated) throw new Error("No se pudo leer el marcador corregido.");
+  return updated;
+}
+
+// Records a no-show. Group phase: official 15-0, 15-0 for the team that showed up.
+// Knockout: the team that showed up advances (or is champion in the final) with no score.
+export async function recordWalkover(db: SQLiteDatabase, matchId: string, absentTeam: "home" | "away"): Promise<LiveMatchRecord> {
+  await db.execAsync("BEGIN TRANSACTION;");
+  try {
+    const match = await getLiveMatch(db, matchId);
+    if (!match) throw new Error("El partido no existe.");
+    if (match.status !== "scheduled") throw new Error("Solo se puede registrar W.O. en un partido que no ha comenzado.");
+    const winner = absentTeam === "home" ? "away" : "home";
+    const absentTeamId = absentTeam === "home" ? match.homeTeamId : match.awayTeamId;
+    const now = new Date().toISOString();
+    const sets = match.phase === "group" ? walkoverSets(winner) : [];
+    await db.runAsync("DELETE FROM match_sets WHERE match_id = ?", matchId);
+    for (const [index, set] of sets.entries()) {
+      await db.runAsync(
+        "INSERT INTO match_sets (match_id, set_number, home_points, away_points, closed_at) VALUES (?, ?, ?, ?, ?)",
+        matchId, index + 1, set.home, set.away, now
+      );
+    }
+    await db.runAsync(
+      "UPDATE matches SET status = 'walkover', winner = ?, walkover_team_id = ?, current_set = ?, updated_at = ? WHERE id = ?",
+      winner, absentTeamId, Math.max(sets.length, 1), now, matchId
+    );
+    const operationId = `walkover-${matchId}`;
+    await db.runAsync(
+      "INSERT INTO audit_log (id, entity_type, entity_id, action, details_json, created_at) VALUES (?, 'match', ?, 'walkover', ?, ?)",
+      `audit-${operationId}`, matchId, JSON.stringify({ absentTeamId, winner, sets }), now
+    );
+    await enqueueSyncOperation(db, `sync-${operationId}`, "match", matchId, "walkover", { absentTeamId, winner, sets, timestamp: now });
+    await db.execAsync("COMMIT;");
+  } catch (error) {
+    await db.execAsync("ROLLBACK;");
+    throw error;
+  }
+  const updated = await getLiveMatch(db, matchId);
+  if (!updated) throw new Error("No se pudo leer el partido.");
   return updated;
 }
 
@@ -540,45 +606,76 @@ export async function savePlayer(
   player: PlayerRecord
 ): Promise<void> {
   if (!player.name.trim()) throw new Error("El nombre del jugador es obligatorio.");
+  const rosterCount = await db.getFirstAsync<{ count: number }>(
+    "SELECT COUNT(*) AS count FROM players WHERE team_id = ? AND id <> ?",
+    player.teamId,
+    player.id
+  );
+  if ((rosterCount?.count ?? 0) >= MAX_ROSTER_SIZE) {
+    throw new Error(`La nómina no puede superar ${MAX_ROSTER_SIZE} jugadores.`);
+  }
+  const activeDuplicate = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM players WHERE lower(name) = lower(?) AND id <> ? AND eligibility_status <> 'ineligible'",
+    player.name.trim(), player.id
+  );
+  if (activeDuplicate) {
+    throw new Error("Este jugador ya está registrado en otra plantilla activa y requiere revisión administrativa.");
+  }
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `INSERT INTO players (id, team_id, name, gender, jersey_number, eligibility_status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET team_id = excluded.team_id, name = excluded.name,
+      gender = excluded.gender, jersey_number = excluded.jersey_number,
+      eligibility_status = excluded.eligibility_status, updated_at = excluded.updated_at`,
+    player.id, player.teamId, player.name.trim(), player.gender, player.jerseyNumber,
+    player.eligibility, now, now
+  );
+}
 
+// Administrative status changes are audited; editing a team or player never resets them
+export async function updateTeamStatus(
+  db: SQLiteDatabase,
+  teamId: string,
+  changes: { paymentStatus?: TeamRecord["paymentStatus"]; registrationStatus?: TeamRecord["registrationStatus"] }
+): Promise<void> {
+  const current = await getTeamRecord(db, teamId);
+  if (!current) throw new Error("El equipo no existe.");
+  const next = {
+    paymentStatus: changes.paymentStatus ?? current.paymentStatus,
+    registrationStatus: changes.registrationStatus ?? current.registrationStatus,
+  };
   const now = new Date().toISOString();
   await db.execAsync("BEGIN TRANSACTION;");
   try {
     await db.runAsync(
-      `INSERT INTO players (id, team_id, name, gender, jersey_number, eligibility_status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         name = excluded.name,
-         gender = excluded.gender,
-         jersey_number = excluded.jersey_number,
-         eligibility_status = excluded.eligibility_status,
-         updated_at = excluded.updated_at`,
-      player.id,
-      player.teamId,
-      player.name.trim(),
-      player.gender,
-      player.jerseyNumber,
-      player.eligibility,
-      now,
-      now
+      "UPDATE teams SET payment_status = ?, registration_status = ?, updated_at = ? WHERE id = ?",
+      next.paymentStatus, next.registrationStatus, now, teamId
     );
-
-    // Encolar para sincronizar con Supabase
-    await enqueueSyncOperation(
-      db,
-      `sync-player-${player.id}`,
-      "player",
-      player.id,
-      "save_player",
-      {
-        teamId: player.teamId,
-        name: player.name.trim(),
-        gender: player.gender,
-        jerseyNumber: player.jerseyNumber,
-        eligibility: player.eligibility,
-      }
+    await db.runAsync(
+      "INSERT INTO audit_log (id, entity_type, entity_id, action, details_json, created_at) VALUES (?, 'team', ?, 'status_change', ?, ?)",
+      `audit-team-${teamId}-${Date.now()}`, teamId,
+      JSON.stringify({ previous: { paymentStatus: current.paymentStatus, registrationStatus: current.registrationStatus }, next }), now
     );
+    await db.execAsync("COMMIT;");
+  } catch (error) {
+    await db.execAsync("ROLLBACK;");
+    throw error;
+  }
+}
 
+export async function updatePlayerEligibility(db: SQLiteDatabase, playerId: string, eligibility: PlayerRecord["eligibility"]): Promise<void> {
+  const current = await getPlayer(db, playerId);
+  if (!current) throw new Error("El jugador no existe.");
+  const now = new Date().toISOString();
+  await db.execAsync("BEGIN TRANSACTION;");
+  try {
+    await db.runAsync("UPDATE players SET eligibility_status = ?, updated_at = ? WHERE id = ?", eligibility, now, playerId);
+    await db.runAsync(
+      "INSERT INTO audit_log (id, entity_type, entity_id, action, details_json, created_at) VALUES (?, 'player', ?, 'eligibility_change', ?, ?)",
+      `audit-player-${playerId}-${Date.now()}`, playerId,
+      JSON.stringify({ previous: current.eligibility, next: eligibility }), now
+    );
     await db.execAsync("COMMIT;");
   } catch (error) {
     await db.execAsync("ROLLBACK;");
@@ -871,6 +968,9 @@ export async function createKnockoutBracketMatches(
   tournamentId: string,
   bracket: SemifinalBracket
 ): Promise<void> {
+  if (!(await isGroupPhaseFinished(db, tournamentId))) {
+    throw new Error("Las semifinales se generan cuando terminan todos los partidos de grupos.");
+  }
   const now = new Date().toISOString();
   await db.execAsync("BEGIN TRANSACTION;");
   try {
@@ -919,6 +1019,13 @@ export async function unlockFinalMatchIfReady(
   const sf1Done = sf1.status === "completed" || sf1.status === "walkover";
   const sf2Done = sf2.status === "completed" || sf2.status === "walkover";
 
+  // A final that has not started follows the semifinals; once it starts its teams are fixed
+  if (!(sf1Done && sf2Done && sf1.winner && sf2.winner)) {
+    await db.runAsync("DELETE FROM match_sets WHERE match_id = 'final' AND EXISTS (SELECT 1 FROM matches WHERE id = 'final' AND status = 'scheduled')");
+    await db.runAsync("DELETE FROM matches WHERE id = 'final' AND status = 'scheduled'");
+    return false;
+  }
+
   if (sf1Done && sf2Done && sf1.winner && sf2.winner) {
     const winner1Id = sf1.winner === "home" ? sf1.home_team_id : sf1.away_team_id;
     const winner2Id = sf2.winner === "home" ? sf2.home_team_id : sf2.away_team_id;
@@ -929,7 +1036,8 @@ export async function unlockFinalMatchIfReady(
       await db.runAsync(
         `INSERT INTO matches (id, tournament_id, phase, home_team_id, away_team_id, court_number, status, current_set, created_at, updated_at)
          VALUES ('final', ?, 'knockout', ?, ?, 1, 'scheduled', 1, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET home_team_id = excluded.home_team_id, away_team_id = excluded.away_team_id, updated_at = excluded.updated_at`,
+         ON CONFLICT(id) DO UPDATE SET home_team_id = excluded.home_team_id, away_team_id = excluded.away_team_id, updated_at = excluded.updated_at
+         WHERE matches.status = 'scheduled'`,
         tournamentId, winner1Id, winner2Id, now, now
       );
       await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('final', 1, 0, 0)");

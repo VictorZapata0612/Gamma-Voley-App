@@ -6,9 +6,15 @@ import {
   getKnockoutMatchWinner,
   isMatchComplete,
   isSetClosed,
+  getTimeoutSetNumber,
+  needsProlongation,
+  PROLONGATION_BASE,
+  toDisplaySetScore,
 } from "./rules";
 import { calculateStandings } from "./standings";
 import { applyScoreAction, useTimeout } from "./scoring";
+import { deriveMatchProgress } from "./liveScoring";
+import { walkoverSets } from "./walkover";
 
 describe("reglas de sets y partidos", () => {
   it("cierra un set de grupos al alcanzar 15", () => {
@@ -16,56 +22,58 @@ describe("reglas de sets y partidos", () => {
     expect(isSetClosed("group", { home: 15, away: 14 }, 1)).toBe(true);
   });
 
-  it("extiende el segundo set hasta lograr ventaja global de +2 en prolongación", () => {
-    const set1 = { home: 15, away: 1 };
-
-    // Set 2: 1-15 (Acumulado 16-16) -> NO cierra (Empate global)
-    expect(isSetClosed("group", { home: 1, away: 15 }, 2, [set1])).toBe(false);
-
-    // Set 2: 2-15 (Acumulado 17-16) -> NO cierra (Ventaja global de solo +1)
-    expect(isSetClosed("group", { home: 2, away: 15 }, 2, [set1])).toBe(false);
-
-    // Set 2: 3-15 (Acumulado 18-16) -> SÍ cierra (Ventaja global de +2 para Equipo 1)
-    expect(isSetClosed("group", { home: 3, away: 15 }, 2, [set1])).toBe(true);
+  it("cierra el segundo set de grupos al alcanzar 15 aunque el global quede empatado", () => {
+    const set1 = { home: 15, away: 10 };
+    expect(isSetClosed("group", { home: 10, away: 14 }, 2, [set1])).toBe(false);
+    expect(isSetClosed("group", { home: 10, away: 15 }, 2, [set1])).toBe(true);
   });
 
-  it("extiende el segundo set cuando el acumulado queda empatado", () => {
-    // Caso empate 20-20
-    expect(
-      isSetClosed("group", { home: 15, away: 14 }, 2, [{ home: 5, away: 6 }]),
-    ).toBe(false);
-    // Caso 15-10 y 10-15: acumulado 25-25 (no debe cerrar aunque el set 2 tenga diferencia de 5)
-    expect(
-      isSetClosed("group", { home: 10, away: 15 }, 2, [{ home: 15, away: 10 }]),
-    ).toBe(false);
-    // Con 1 punto de ventaja global (25-26), aún no cierra
-    expect(
-      isSetClosed("group", { home: 10, away: 16 }, 2, [{ home: 15, away: 10 }]),
-    ).toBe(false);
-    // Con 2 puntos de ventaja global (25-27), cierra la prolongación
-    expect(
-      isSetClosed("group", { home: 10, away: 17 }, 2, [{ home: 15, away: 10 }]),
-    ).toBe(true);
+  it("gana por 1 en el global cuando el segundo set cierra sin empate", () => {
+    const sets = [{ home: 15, away: 14 }, { home: 13, away: 15 }];
+    expect(isSetClosed("group", sets[1], 2, [sets[0]])).toBe(true);
+    expect(needsProlongation(sets)).toBe(false);
+    expect(getGroupMatchWinner(sets)).toBe("away");
+    expect(isMatchComplete("group", sets)).toBe(true);
   });
 
-  it("cierra prolongación con diferencia de 2 en el set cuando ambos están en zona de alargue", () => {
-    // Set 1: 15-14 (+1 Home). Set 2: 14-15 (+1 Away) -> acumulado 29-29 (empate base)
-    expect(
-      isSetClosed("group", { home: 14, away: 15 }, 2, [{ home: 15, away: 14 }]),
-    ).toBe(false);
-    // Away anota y saca 2 de ventaja en el set 2 (14-16) y lidera global 29-30 -> cierra
-    expect(
-      isSetClosed("group", { home: 14, away: 16 }, 2, [{ home: 15, away: 14 }]),
-    ).toBe(true);
+  it("abre prolongación cuando el global queda empatado al cerrar el segundo set", () => {
+    const sets = [{ home: 15, away: 10 }, { home: 10, away: 15 }];
+    expect(needsProlongation(sets)).toBe(true);
+    expect(getGroupMatchWinner(sets)).toBeNull();
+    expect(isMatchComplete("group", sets)).toBe(false);
   });
 
-  it("resuelve 20-20 del segundo set al llegar a 21", () => {
-    expect(
-      isSetClosed("group", { home: 20, away: 20 }, 2, [{ home: 15, away: 15 }]),
-    ).toBe(false);
-    expect(
-      isSetClosed("group", { home: 21, away: 20 }, 2, [{ home: 5, away: 15 }]),
-    ).toBe(true);
+  it("muestra la prolongación desde 15-15", () => {
+    expect(PROLONGATION_BASE).toBe(15);
+    expect(toDisplaySetScore("group", 3, { home: 2, away: 0 })).toEqual({ home: 17, away: 15 });
+    expect(toDisplaySetScore("group", 2, { home: 10, away: 15 })).toEqual({ home: 10, away: 15 });
+    expect(toDisplaySetScore("knockout", 3, { home: 2, away: 0 })).toEqual({ home: 2, away: 0 });
+  });
+
+  it("cierra la prolongación con 2 de ventaja (17-15 y 18-16)", () => {
+    expect(isSetClosed("group", { home: 1, away: 0 }, 3)).toBe(false);
+    expect(isSetClosed("group", { home: 2, away: 0 }, 3)).toBe(true);
+    expect(isSetClosed("group", { home: 2, away: 1 }, 3)).toBe(false);
+    expect(isSetClosed("group", { home: 3, away: 1 }, 3)).toBe(true);
+  });
+
+  it("cierra la prolongación en 21 tras 20-20", () => {
+    expect(isSetClosed("group", { home: 5, away: 5 }, 3)).toBe(false);
+    expect(isSetClosed("group", { home: 6, away: 5 }, 3)).toBe(true);
+  });
+
+  it("la prolongación comparte los tiempos muertos del set 2", () => {
+    expect(getTimeoutSetNumber("group", 3)).toBe(2);
+    expect(getTimeoutSetNumber("group", 2)).toBe(2);
+    expect(getTimeoutSetNumber("knockout", 3)).toBe(3);
+  });
+
+  it("declara ganador de grupos al cerrar la prolongación", () => {
+    const sets = [{ home: 15, away: 10 }, { home: 10, away: 15 }, { home: 6, away: 5 }];
+    expect(getGroupMatchWinner(sets)).toBe("home");
+    expect(isMatchComplete("group", sets)).toBe(true);
+    expect(getGroupMatchWinner([sets[0], sets[1], { home: 1, away: 0 }])).toBeNull();
+    expect(isMatchComplete("group", [sets[0], sets[1], { home: 1, away: 0 }])).toBe(false);
   });
 
   it("determina el ganador de grupos por acumulado", () => {
@@ -129,7 +137,7 @@ describe("clasificación y cuadro", () => {
     winner,
   });
 
-  it("asigna tres puntos al ganador 2-0 y uno al perdedor", () => {
+  it("asigna tres puntos al ganador 2-0 y cero al perdedor", () => {
     const rows = calculateStandings(
       [
         { id: "a", name: "A" },
@@ -144,9 +152,61 @@ describe("clasificación y cuadro", () => {
     });
     expect(rows[1]).toMatchObject({
       teamId: "b",
-      classificationPoints: 1,
+      classificationPoints: 0,
       pointDifferential: -10,
     });
+  });
+
+  it("cuenta un partido con prolongación como 1-1 y suma sus puntos al diferencial", () => {
+    const prolonged = {
+      matchId: "m3",
+      phase: "group" as const,
+      homeTeamId: "a",
+      awayTeamId: "b",
+      sets: [
+        { home: 15, away: 10 },
+        { home: 10, away: 15 },
+        { home: 2, away: 0 },
+      ],
+      status: "completed" as const,
+      winner: "home" as const,
+    };
+    const rows = calculateStandings(
+      [
+        { id: "a", name: "A" },
+        { id: "b", name: "B" },
+      ],
+      [prolonged],
+    );
+    expect(rows[0]).toMatchObject({ teamId: "a", classificationPoints: 2, pointDifferential: 2 });
+    expect(rows[1]).toMatchObject({ teamId: "b", classificationPoints: 1, pointDifferential: -2 });
+  });
+
+  it("registra el W.O. de grupos como 15-0 y 15-0 a favor del que se presentó", () => {
+    expect(walkoverSets("home")).toEqual([{ home: 15, away: 0 }, { home: 15, away: 0 }]);
+    expect(walkoverSets("away")).toEqual([{ home: 0, away: 15 }, { home: 0, away: 15 }]);
+  });
+
+  it("asigna tres puntos al ganador por W.O. y cero al que no se presentó", () => {
+    const walkover = {
+      matchId: "m4",
+      phase: "group" as const,
+      homeTeamId: "a",
+      awayTeamId: "b",
+      sets: walkoverSets("home"),
+      status: "walkover" as const,
+      winner: "home" as const,
+      walkoverTeamId: "b",
+    };
+    const rows = calculateStandings(
+      [
+        { id: "a", name: "A" },
+        { id: "b", name: "B" },
+      ],
+      [walkover],
+    );
+    expect(rows[0]).toMatchObject({ teamId: "a", classificationPoints: 3, pointDifferential: 30 });
+    expect(rows[1]).toMatchObject({ teamId: "b", classificationPoints: 0, pointDifferential: -30 });
   });
 
   it("asigna dos puntos al ganador cuando el partido termina 1-1", () => {
@@ -281,42 +341,39 @@ describe("Reglas de Cierre de Set y Prolongación (Gamma Voley 2026)", () => {
     expect(isSetClosed("group", { home: 14, away: 14 }, 1, [])).toBe(false);
   });
 
-  it("mantiene en prolongación el Set 2 si el acumulado global está empatado", () => {
-    const set1 = { home: 15, away: 1 };
-    // Set 2: 1-15 -> Acumulado 16-16 (Empate global) -> NO cierra
-    expect(isSetClosed("group", { home: 1, away: 15 }, 2, [set1])).toBe(false);
-  });
-
-  it("exige ventaja global de +2 durante la prolongación antes del tope de 21", () => {
-    const set1 = { home: 15, away: 1 };
-    // Set 2: 2-15 -> Acumulado 17-16 (Diferencia de +1) -> NO cierra
-    expect(isSetClosed("group", { home: 2, away: 15 }, 2, [set1])).toBe(false);
-
-    // Set 2: 3-15 -> Acumulado 18-16 (Diferencia de +2) -> SÍ cierra
-    expect(isSetClosed("group", { home: 3, away: 15 }, 2, [set1])).toBe(true);
-  });
-
-  it("cierra inmediatamente al llegar a 21 (tope máximo) desde un empate 20-20 global", () => {
-    const set1 = { home: 15, away: 5 };
-    // Set 2: 5-15 -> Acumulado 20-20 (Empate global a 20) -> NO cierra
-    expect(isSetClosed("group", { home: 5, away: 15 }, 2, [set1])).toBe(false);
-
-    // Set 2: 6-15 -> Acumulado 21-20 (Llega a 21 tras 20-20) -> SÍ cierra
-    expect(isSetClosed("group", { home: 6, away: 15 }, 2, [set1])).toBe(true);
-  });
-
-  it("cierra inmediatamente si el Set 2 alcanza los 21 puntos (tope del set)", () => {
-    const set1 = { home: 10, away: 10 };
-    // Set 2: 20-20 -> Acumulado 30-30 -> NO cierra por empate global
-    expect(isSetClosed("group", { home: 20, away: 20 }, 2, [set1])).toBe(false);
-
-    // Set 2: 21-20 -> Cierra inmediatamente por alcanzar tope de 21 en el set
-    expect(isSetClosed("group", { home: 21, away: 20 }, 2, [set1])).toBe(true);
-  });
-
   it("aplica reglas de Eliminación Directa correctamente (21 puntos con ventaja de +2)", () => {
     expect(isSetClosed("knockout", { home: 21, away: 19 }, 1, [])).toBe(true);
     expect(isSetClosed("knockout", { home: 21, away: 20 }, 1, [])).toBe(false);
     expect(isSetClosed("knockout", { home: 22, away: 20 }, 1, [])).toBe(true);
+  });
+});
+describe("progreso del partido derivado de los sets", () => {
+  it("abre el set 2 cuando cierra el set 1 de grupos", () => {
+    expect(deriveMatchProgress("group", [{ home: 15, away: 9 }])).toEqual({ setCount: 2, winner: null });
+  });
+
+  it("abre la prolongación cuando el global queda empatado", () => {
+    const sets = [{ home: 15, away: 10 }, { home: 10, away: 15 }];
+    expect(deriveMatchProgress("group", sets)).toEqual({ setCount: 3, winner: null });
+  });
+
+  it("quita la prolongación si una corrección rompe el empate global", () => {
+    const sets = [{ home: 15, away: 10 }, { home: 11, away: 15 }, { home: 0, away: 0 }];
+    expect(deriveMatchProgress("group", sets)).toEqual({ setCount: 2, winner: "home" });
+  });
+
+  it("reabre el set 2 si una corrección lo deja por debajo de 15", () => {
+    const sets = [{ home: 15, away: 10 }, { home: 10, away: 14 }];
+    expect(deriveMatchProgress("group", sets)).toEqual({ setCount: 2, winner: null });
+  });
+
+  it("termina la eliminación directa 2-0 sin abrir el tercer set", () => {
+    const sets = [{ home: 21, away: 18 }, { home: 21, away: 19 }];
+    expect(deriveMatchProgress("knockout", sets)).toEqual({ setCount: 2, winner: "home" });
+  });
+
+  it("abre el tercer set de eliminación directa con 1-1", () => {
+    const sets = [{ home: 21, away: 18 }, { home: 19, away: 21 }];
+    expect(deriveMatchProgress("knockout", sets)).toEqual({ setCount: 3, winner: null });
   });
 });

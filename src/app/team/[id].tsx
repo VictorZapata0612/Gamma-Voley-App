@@ -1,9 +1,23 @@
-// @ts-nocheck
 import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
-import { deleteTeam, getTeamRecord, listPlayers, saveTeamRecord, type PlayerRecord, type TeamRecord } from "@/database/repositories";
+import {
+  deleteTeam,
+  getTeamRecord,
+  listPlayers,
+  updatePlayerEligibility,
+  updateTeamStatus,
+  type PlayerRecord,
+  type TeamRecord,
+} from "@/database/repositories";
+import { goBack } from "@/utils/navigation";
+
+const NEXT_ELIGIBILITY: Record<PlayerRecord["eligibility"], PlayerRecord["eligibility"]> = {
+  pending_review: "eligible",
+  eligible: "ineligible",
+  ineligible: "pending_review",
+};
 
 export default function TeamDetailScreen() {
   const db = useSQLiteContext();
@@ -38,47 +52,48 @@ export default function TeamDetailScreen() {
     }
   }, [db, teamId]);
 
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
+  async function changeTeamStatus(changes: Parameters<typeof updateTeamStatus>[2]) {
+    if (!teamId) return;
+    try {
+      await updateTeamStatus(db, teamId, changes);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo actualizar el equipo.");
+    }
+  }
+
+  async function cycleEligibility(player: PlayerRecord) {
+    try {
+      await updatePlayerEligibility(db, player.id, NEXT_ELIGIBILITY[player.eligibility]);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo actualizar la elegibilidad.");
+    }
+  }
+
+  // Reload on focus so returning from a form shows the saved data
+  useFocusEffect(
+    useCallback(() => {
       void load();
-    }, 0);
+    }, [load])
+  );
 
-    return () => clearTimeout(timeoutId);
-  }, [load]);
-
+  // Status changes go through the audited repository update
   async function togglePaymentStatus() {
     if (!team) return;
-    const newStatus = team.paymentStatus === "paid" ? "pending" : "paid";
-    try {
-      await saveTeamRecord(db, {
-        ...team,
-        paymentStatus: newStatus,
-      });
-      void load();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "No se pudo actualizar el estado de pago.");
-    }
+    await changeTeamStatus({ paymentStatus: team.paymentStatus === "paid" ? "pending" : "paid" });
   }
 
   async function toggleRegistrationStatus() {
     if (!team) return;
-    const newStatus = team.registrationStatus === "confirmed" ? "pending" : "confirmed";
-    try {
-      await saveTeamRecord(db, {
-        ...team,
-        registrationStatus: newStatus,
-      });
-      void load();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "No se pudo actualizar el estado de registro.");
-    }
+    await changeTeamStatus({ registrationStatus: team.registrationStatus === "confirmed" ? "pending" : "confirmed" });
   }
 
   async function removeTeam() {
     if (!teamId) return;
     try {
       await deleteTeam(db, teamId);
-      router.replace("/teams");
+      goBack("/teams");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No se pudo eliminar el equipo.");
     }
@@ -97,7 +112,7 @@ export default function TeamDetailScreen() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.errorState}>
           <Text style={styles.error}>{error ?? "No se encontró el equipo."}</Text>
-          <Pressable onPress={() => router.back()} style={styles.secondary}>
+          <Pressable onPress={() => goBack("/teams")} style={styles.secondary}>
             <Text style={styles.secondaryText}>Volver a equipos</Text>
           </Pressable>
         </View>
@@ -114,7 +129,7 @@ export default function TeamDetailScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver a equipos" onPress={() => router.back()}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Volver a equipos" onPress={() => goBack("/teams")}>
           <Text style={styles.back}>‹ Equipos</Text>
         </Pressable>
 
@@ -274,7 +289,10 @@ export default function TeamDetailScreen() {
                     <Text style={styles.genderBadge}>
                       {player.gender === "female" ? "👩 Mujer" : "👨 Hombre"}
                     </Text>
-                    <View
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Cambiar elegibilidad de ${player.name}`}
+                      onPress={() => void cycleEligibility(player)}
                       style={[
                         styles.eligibilityBadge,
                         isEligible
@@ -300,9 +318,17 @@ export default function TeamDetailScreen() {
                           ? "⏳ Revisión"
                           : "✕ No elegible"}
                       </Text>
-                    </View>
+                    </Pressable>
                   </View>
                 </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Editar a ${player.name}`}
+                  onPress={() => router.push({ pathname: "/player-form", params: { teamId: team.id, id: player.id } })}
+                  style={styles.editPlayer}
+                >
+                  <Text style={styles.editPlayerText}>Editar</Text>
+                </Pressable>
               </View>
             );
           })
@@ -475,6 +501,8 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 4,
   },
+  editPlayer: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: "#24262C", marginLeft: 8 },
+  editPlayerText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
   eligibilityBadge: {
     paddingHorizontal: 6,
     paddingVertical: 2,

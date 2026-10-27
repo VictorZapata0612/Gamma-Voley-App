@@ -1,6 +1,5 @@
 import type { SQLiteDatabase } from "expo-sqlite";
 import type { GroupId, Match, MatchResult, ScoreAction, SemifinalBracket, SetScore, Team, TimeoutState } from "@/domain/types";import type { Player } from "@/domain/eligibility";
-import { MAX_ROSTER_SIZE } from "@/domain/eligibility";
 import type { ScheduledGroupMatch } from "@/domain/schedule";
 import { deriveMatchProgress, type MatchProgress } from "@/domain/liveScoring";
 import { getTimeoutSetNumber } from "@/domain/rules";
@@ -451,14 +450,6 @@ export async function savePlayer(
   player: PlayerRecord
 ): Promise<void> {
   if (!player.name.trim()) throw new Error("El nombre del jugador es obligatorio.");
-  const rosterCount = await db.getFirstAsync<{ count: number }>(
-    "SELECT COUNT(*) AS count FROM players WHERE team_id = ? AND id <> ?",
-    player.teamId,
-    player.id
-  );
-  if ((rosterCount?.count ?? 0) >= MAX_ROSTER_SIZE) {
-    throw new Error(`La nómina no puede superar ${MAX_ROSTER_SIZE} jugadores.`);
-  }
   const activeDuplicate = await db.getFirstAsync<{ id: string }>(
     "SELECT id FROM players WHERE lower(name) = lower(?) AND id <> ? AND eligibility_status <> 'ineligible'",
     player.name.trim(), player.id

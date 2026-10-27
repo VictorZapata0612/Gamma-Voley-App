@@ -33,7 +33,7 @@ export function isSetClosed(
     return high >= 21 && high - low >= 2;
   }
 
-  // En fase de grupos, el set 1 cierra a los 15 puntos base
+  // En fase de grupos, el set 1 cierra al alcanzar los 15 puntos base
   if (setNumber === 1) {
     return high >= 15;
   }
@@ -45,19 +45,27 @@ export function isSetClosed(
   const accumulatedAway = previousSets.reduce((sum, item) => sum + item.away, 0) + set.away;
   const globalDiff = Math.abs(accumulatedHome - accumulatedAway);
 
-  // Un set de grupos NUNCA puede cerrarse mientras el acumulado global permanezca empatado
+  // 1. Un set de grupos NUNCA puede cerrarse si el acumulado global permanece empatado
   if (globalDiff === 0) return false;
 
-  // Límite máximo de 21 puntos en el set 2: al llegar a 20-20 gana quien alcance 21
+  // 2. Límite máximo de 21 puntos en el set 2:
   if (high >= 21) return true;
 
-  // Si ambos equipos están en zona de alargue (ambos con >= 14), requiere ventaja de 2 en el set
+  // 3. Regla especial tras empate 20-20 en el acumulado global:
+  // Si el partido viene de un 20-20 global, el primero en alcanzar los 21 puntos acumulados gana.
+  if ((accumulatedHome === 21 && accumulatedAway === 20) || (accumulatedHome === 20 && accumulatedAway === 21)) {
+    return true;
+  }
+
+  // 4. Zona de alargue propia del set (ambos equipos en >= 14 en el set 2):
+  // Cierra cuando un equipo logra ventaja de 2 puntos en el set (ej. 14-16, 15-17).
   if (low >= 14) {
     return high - low >= 2;
   }
 
-  // Si el set 2 superó los 15 puntos (prolongación), se requiere ventaja de al menos 2 puntos en el acumulado global
-  if (high > 15 && globalDiff < 2) {
+  // 5. Prolongación global por acumulado (para cualquier otro caso):
+  // Exige al menos +2 de ventaja en el marcador global acumulado (ej. 18-16, 27-25).
+  if (globalDiff < 2) {
     return false;
   }
 

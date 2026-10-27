@@ -1,55 +1,74 @@
-import { router } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
-import { listCalendarMatches, type CalendarMatchRecord } from "@/database/repositories";
+import {
+  listCalendarMatches,
+  listKnockoutMatches,
+  type CalendarMatchRecord,
+  type KnockoutMatchRecord,
+} from "@/database/repositories";
 
 export default function CalendarScreen() {
   const db = useSQLiteContext();
-  const [matches, setMatches] = useState<CalendarMatchRecord[]>([]);
+  const [groupMatches, setGroupMatches] = useState<CalendarMatchRecord[]>([]);
+  const [knockoutMatches, setKnockoutMatches] = useState<KnockoutMatchRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [selectedFilter, setSelectedFilter] = useState<"ALL" | 1 | 2>("ALL");
+  const [selectedFilter, setSelectedFilter] = useState<"ALL" | 1 | 2 | "FINAL">("ALL");
 
   const load = useCallback(async () => {
     try {
-      setMatches(await listCalendarMatches(db, DEFAULT_TOURNAMENT_ID));
+      setGroupMatches(await listCalendarMatches(db, DEFAULT_TOURNAMENT_ID));
+      setKnockoutMatches(await listKnockoutMatches(db, DEFAULT_TOURNAMENT_ID));
       setError(null);
     } catch {
       setError("No se pudo cargar el calendario desde SQLite.");
     }
   }, [db]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
-  const filteredMatches = matches.filter((m) => {
+  const filteredGroupMatches = groupMatches.filter((m) => {
     if (selectedFilter === "ALL") return true;
+    if (selectedFilter === "FINAL") return false;
     return m.courtNumber === selectedFilter;
   });
 
-  const inProgressCount = matches.filter((m) => m.status === "in_progress").length;
-  const completedCount = matches.filter((m) => m.status === "completed" || m.status === "walkover").length;
+  const filteredKnockoutMatches = knockoutMatches.filter((m) => {
+    if (selectedFilter === "ALL" || selectedFilter === "FINAL") return true;
+    return m.courtNumber === selectedFilter;
+  });
+
+  const totalMatchesCount = groupMatches.length + knockoutMatches.length;
+  const inProgressCount =
+    groupMatches.filter((m) => m.status === "in_progress").length +
+    knockoutMatches.filter((m) => m.status === "in_progress").length;
+  const completedCount =
+    groupMatches.filter((m) => m.status === "completed" || m.status === "walkover").length +
+    knockoutMatches.filter((m) => m.status === "completed" || m.status === "walkover").length;
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
         <Pressable accessibilityRole="button" accessibilityLabel="Volver a grupos" onPress={() => router.back()}>
-          <Text style={styles.back}>‹ Grupos</Text>
+          <Text style={styles.back}>‹ Grupos y Tabla</Text>
         </Pressable>
 
-        <Text style={styles.eyebrow}>CALENDARIO OFICIAL · FASE DE GRUPOS</Text>
+        <Text style={styles.eyebrow}>CALENDARIO OFICIAL · TORNEO GAMMA VOLEY</Text>
         <Text style={styles.title}>Rol de Partidos</Text>
         <Text style={styles.subtitle}>
-          Sábado 14 de noviembre · 2 canchas simultáneas · 2 sets a 15 puntos base
+          Sábado 14 Nov (Grupos) y Domingo 15 Nov (Playoffs) · 2 Canchas Simultáneas
         </Text>
 
         {/* Resumen de estado de partidos */}
         <View style={styles.summaryRow}>
           <View style={styles.summaryBadge}>
-            <Text style={styles.summaryNumber}>{matches.length}</Text>
+            <Text style={styles.summaryNumber}>{totalMatchesCount}</Text>
             <Text style={styles.summaryLabel}>Total Partidos</Text>
           </View>
           <View style={[styles.summaryBadge, inProgressCount > 0 && styles.summaryLive]}>
@@ -64,14 +83,14 @@ export default function CalendarScreen() {
           </View>
         </View>
 
-        {/* Filtro por Cancha */}
+        {/* Filtro por Cancha / Fase */}
         <View style={styles.filterRow}>
           <Pressable
             onPress={() => setSelectedFilter("ALL")}
             style={[styles.filterPill, selectedFilter === "ALL" && styles.filterPillActive]}
           >
             <Text style={[styles.filterText, selectedFilter === "ALL" && styles.filterTextActive]}>
-              Todas ({matches.length})
+              Todos ({totalMatchesCount})
             </Text>
           </Pressable>
 
@@ -80,7 +99,7 @@ export default function CalendarScreen() {
             style={[styles.filterPill, selectedFilter === 1 && styles.filterPillActiveA]}
           >
             <Text style={[styles.filterText, selectedFilter === 1 && styles.filterTextActive]}>
-              🏟️ Cancha 1 (Grupo A)
+              🏟️ Cancha 1
             </Text>
           </Pressable>
 
@@ -89,103 +108,173 @@ export default function CalendarScreen() {
             style={[styles.filterPill, selectedFilter === 2 && styles.filterPillActiveB]}
           >
             <Text style={[styles.filterText, selectedFilter === 2 && styles.filterTextActive]}>
-              🏟️ Cancha 2 (Grupo B)
+              🏟️ Cancha 2
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => setSelectedFilter("FINAL")}
+            style={[styles.filterPill, selectedFilter === "FINAL" && styles.filterPillActiveFinal]}
+          >
+            <Text style={[styles.filterText, selectedFilter === "FINAL" && styles.filterTextActive]}>
+              🏆 Fase Final
             </Text>
           </Pressable>
         </View>
 
         {error && <Text style={styles.errorText}>{error}</Text>}
 
-        {/* Listado de partidos */}
-        {matches.length === 0 && !error ? (
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyIcon}>📋</Text>
-            <Text style={styles.emptyTitle}>Calendario no generado</Text>
-            <Text style={styles.emptyText}>
-              Asigna los 4 equipos a cada grupo en el módulo de Grupos y presiona "Generar Calendario Oficial".
-            </Text>
-            <Pressable onPress={() => router.push("./groups")} style={styles.emptyAction}>
-              <Text style={styles.emptyActionText}>Ir a Grupos y Canchas ›</Text>
-            </Pressable>
-          </View>
-        ) : (
-          filteredMatches.map((match, index) => {
-            const isGroupA = match.groupId === "A";
-            const isLive = match.status === "in_progress";
-            const isCompleted = match.status === "completed" || match.status === "walkover";
+        {/* Sección: Fase Final (Si existen partidos) */}
+        {filteredKnockoutMatches.length > 0 && (
+          <View style={styles.phaseSection}>
+            <Text style={styles.phaseHeaderTitle}>🏆 Fase Final · Domingo 15 de Noviembre</Text>
 
-            return (
-              <Pressable
-                key={match.id}
-                onPress={() => router.push(`/live-score?matchId=${encodeURIComponent(match.id)}`)}
-                style={({ pressed }) => [
-                  styles.matchCard,
-                  isLive && styles.matchCardLive,
-                  pressed && styles.pressed,
-                ]}
-              >
-                {/* Cabecera de la tarjeta */}
-                <View style={styles.matchTopRow}>
-                  <View style={styles.badgesCluster}>
-                    <View style={[styles.groupPill, !isGroupA && styles.groupPillB]}>
-                      <Text style={styles.groupPillText}>GRUPO {match.groupId}</Text>
+            {filteredKnockoutMatches.map((m) => {
+              const isLive = m.status === "in_progress";
+              const isCompleted = m.status === "completed" || m.status === "walkover";
+
+              return (
+                <Pressable
+                  key={m.id}
+                  onPress={() => router.push(`/live-score?matchId=${encodeURIComponent(m.id)}`)}
+                  style={({ pressed }) => [
+                    styles.matchCard,
+                    styles.matchCardKnockout,
+                    isLive && styles.matchCardLive,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <View style={styles.matchTopRow}>
+                    <View style={styles.badgesCluster}>
+                      <View style={styles.knockoutPill}>
+                        <Text style={styles.knockoutPillText}>{m.label.toUpperCase()}</Text>
+                      </View>
+                      <Text style={styles.courtNameText}>Cancha {m.courtNumber}</Text>
                     </View>
-                    <Text style={styles.courtNameText}>Cancha {match.courtNumber}</Text>
-                  </View>
 
-                  <View
-                    style={[
-                      styles.statusPill,
-                      isLive ? styles.statusLive : isCompleted ? styles.statusCompleted : styles.statusScheduled,
-                    ]}
-                  >
-                    {isLive && <View style={styles.liveDot} />}
-                    <Text
+                    <View
                       style={[
-                        styles.statusPillText,
-                        isLive ? styles.statusLiveText : isCompleted ? styles.statusCompletedText : styles.statusScheduledText,
+                        styles.statusPill,
+                        isLive ? styles.statusLive : isCompleted ? styles.statusCompleted : styles.statusScheduled,
                       ]}
                     >
-                      {isLive ? "EN VIVO" : isCompleted ? "FINALIZADO" : "PROGRAMADO"}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Enfrentamiento de equipos */}
-                <View style={styles.matchupBody}>
-                  <View style={styles.teamCol}>
-                    <View style={[styles.teamAvatar, isGroupA ? styles.avatarA : styles.avatarB]}>
-                      <Text style={styles.avatarLetter}>{match.homeName.slice(0, 1).toUpperCase()}</Text>
+                      {isLive && <View style={styles.liveDot} />}
+                      <Text
+                        style={[
+                          styles.statusPillText,
+                          isLive ? styles.statusLiveText : isCompleted ? styles.statusCompletedText : styles.statusScheduledText,
+                        ]}
+                      >
+                        {isLive ? "EN VIVO" : isCompleted ? "FINALIZADO" : "PROGRAMADO"}
+                      </Text>
                     </View>
-                    <Text style={styles.teamNameText} numberOfLines={2}>
-                      {match.homeName}
-                    </Text>
                   </View>
 
-                  <View style={styles.vsBox}>
+                  <View style={styles.matchupBody}>
+                    <View style={styles.teamCol}>
+                      <Text style={[styles.teamNameText, m.winner === "home" && styles.winnerText]}>
+                        {m.homeName}
+                      </Text>
+                    </View>
                     <Text style={styles.vsText}>VS</Text>
-                    <Text style={styles.matchIndexText}>#{index + 1}</Text>
+                    <View style={styles.teamCol}>
+                      <Text style={[styles.teamNameText, m.winner === "away" && styles.winnerText]}>
+                        {m.awayName}
+                      </Text>
+                    </View>
                   </View>
 
-                  <View style={styles.teamCol}>
-                    <View style={[styles.teamAvatar, isGroupA ? styles.avatarA : styles.avatarB]}>
-                      <Text style={styles.avatarLetter}>{match.awayName.slice(0, 1).toUpperCase()}</Text>
-                    </View>
-                    <Text style={styles.teamNameText} numberOfLines={2}>
-                      {match.awayName}
+                  <View style={styles.matchFooter}>
+                    <Text style={[styles.actionLabel, isLive && styles.actionLabelLive]}>
+                      {isLive ? "Mesa de control en vivo ⚡" : isCompleted ? "Ver resultado oficial ›" : "Iniciar partido ›"}
                     </Text>
                   </View>
-                </View>
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
 
-                {/* Pie de tarjeta interactivo */}
-                <View style={styles.matchFooter}>
-                  <Text style={[styles.actionLabel, isLive && styles.actionLabelLive]}>
-                    {isLive ? "Abrir mesa de control en vivo ⚡" : isCompleted ? "Ver resultado oficial ›" : "Iniciar partido y marcador ›"}
-                  </Text>
-                </View>
-              </Pressable>
-            );
-          })
+        {/* Sección: Fase de Grupos */}
+        {selectedFilter !== "FINAL" && (
+          <View style={styles.phaseSection}>
+            <Text style={styles.phaseHeaderTitle}>📋 Fase de Grupos · Sábado 14 de Noviembre</Text>
+
+            {filteredGroupMatches.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Text style={styles.emptyTitle}>Sin partidos de grupos para este filtro</Text>
+              </View>
+            ) : (
+              filteredGroupMatches.map((match, index) => {
+                const isGroupA = match.groupId === "A";
+                const isLive = match.status === "in_progress";
+                const isCompleted = match.status === "completed" || match.status === "walkover";
+
+                return (
+                  <Pressable
+                    key={match.id}
+                    onPress={() => router.push(`/live-score?matchId=${encodeURIComponent(match.id)}`)}
+                    style={({ pressed }) => [
+                      styles.matchCard,
+                      isLive && styles.matchCardLive,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <View style={styles.matchTopRow}>
+                      <View style={styles.badgesCluster}>
+                        <View style={[styles.groupPill, !isGroupA && styles.groupPillB]}>
+                          <Text style={styles.groupPillText}>GRUPO {match.groupId}</Text>
+                        </View>
+                        <Text style={styles.courtNameText}>Cancha {match.courtNumber}</Text>
+                      </View>
+
+                      <View
+                        style={[
+                          styles.statusPill,
+                          isLive ? styles.statusLive : isCompleted ? styles.statusCompleted : styles.statusScheduled,
+                        ]}
+                      >
+                        {isLive && <View style={styles.liveDot} />}
+                        <Text
+                          style={[
+                            styles.statusPillText,
+                            isLive ? styles.statusLiveText : isCompleted ? styles.statusCompletedText : styles.statusScheduledText,
+                          ]}
+                        >
+                          {isLive ? "EN VIVO" : isCompleted ? "FINALIZADO" : "PROGRAMADO"}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.matchupBody}>
+                      <View style={styles.teamCol}>
+                        <Text style={styles.teamNameText} numberOfLines={2}>
+                          {match.homeName}
+                        </Text>
+                      </View>
+
+                      <View style={styles.vsBox}>
+                        <Text style={styles.vsText}>VS</Text>
+                        <Text style={styles.matchIndexText}>#{index + 1}</Text>
+                      </View>
+
+                      <View style={styles.teamCol}>
+                        <Text style={styles.teamNameText} numberOfLines={2}>
+                          {match.awayName}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.matchFooter}>
+                      <Text style={[styles.actionLabel, isLive && styles.actionLabelLive]}>
+                        {isLive ? "Mesa de control en vivo ⚡" : isCompleted ? "Ver resultado oficial ›" : "Iniciar partido y marcador ›"}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })
+            )}
+          </View>
         )}
       </ScrollView>
     </SafeAreaView>
@@ -217,7 +306,7 @@ const styles = StyleSheet.create({
 
   filterRow: { flexDirection: "row", gap: 6, marginBottom: 16 },
   filterPill: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: 8,
     backgroundColor: "#1C1E23",
@@ -227,22 +316,20 @@ const styles = StyleSheet.create({
   filterPillActive: { backgroundColor: "#30323A", borderColor: "#454751" },
   filterPillActiveA: { backgroundColor: "#E53935", borderColor: "#E53935" },
   filterPillActiveB: { backgroundColor: "#1E88E5", borderColor: "#1E88E5" },
+  filterPillActiveFinal: { backgroundColor: "#D84315", borderColor: "#FF5722" },
   filterText: { color: "#A6A8AE", fontSize: 11, fontWeight: "800" },
   filterTextActive: { color: "#FFFFFF" },
+
+  phaseSection: { marginBottom: 18 },
+  phaseHeaderTitle: { color: "#FFFFFF", fontSize: 15, fontWeight: "800", marginBottom: 10 },
 
   emptyCard: {
     backgroundColor: "#17181D",
     borderRadius: 16,
-    padding: 24,
+    padding: 16,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#2B2D35",
   },
-  emptyIcon: { fontSize: 32, marginBottom: 8 },
-  emptyTitle: { color: "#FFF", fontSize: 15, fontWeight: "800" },
-  emptyText: { color: "#A6A8AE", fontSize: 11, textAlign: "center", marginTop: 4, lineHeight: 16 },
-  emptyAction: { marginTop: 14, backgroundColor: "#E53935", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
-  emptyActionText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
+  emptyTitle: { color: "#70737C", fontSize: 12, fontStyle: "italic" },
 
   matchCard: {
     backgroundColor: "#1C1E23",
@@ -252,12 +339,25 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#2B2D35",
   },
+  matchCardKnockout: {
+    borderColor: "#D84315",
+    backgroundColor: "#1F1A18",
+  },
   matchCardLive: {
     borderColor: "#4CAF50",
     backgroundColor: "#17231B",
   },
   matchTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
   badgesCluster: { flexDirection: "row", alignItems: "center", gap: 8 },
+
+  knockoutPill: {
+    backgroundColor: "#D84315",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  knockoutPillText: { color: "#FFF", fontSize: 9, fontWeight: "900", letterSpacing: 0.5 },
+
   groupPill: {
     backgroundColor: "#E53935",
     paddingHorizontal: 6,
@@ -287,18 +387,8 @@ const styles = StyleSheet.create({
 
   matchupBody: { flexDirection: "row", alignItems: "center", marginVertical: 6 },
   teamCol: { flex: 1, alignItems: "center" },
-  teamAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 6,
-  },
-  avatarA: { backgroundColor: "#E53935" },
-  avatarB: { backgroundColor: "#1E88E5" },
-  avatarLetter: { color: "#FFF", fontSize: 15, fontWeight: "900" },
   teamNameText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800", textAlign: "center" },
+  winnerText: { color: "#55C77A" },
   vsBox: { width: 44, alignItems: "center" },
   vsText: { color: "#70737C", fontSize: 11, fontWeight: "900" },
   matchIndexText: { color: "#454751", fontSize: 9, fontWeight: "700", marginTop: 2 },

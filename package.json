@@ -42,6 +42,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "eslint .",
+    "test": "vitest run",
     "test:domain": "vitest run"
   },
   "private": true

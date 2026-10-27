@@ -1,32 +1,47 @@
-import { router } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import { calculateStandings } from "@/domain/standings";
 import { buildSemifinalBracket } from "@/domain/bracket";
-import { listGroupResults, listGroupTeams, type GroupTeamRecord } from "@/database/repositories";
+import {
+  createKnockoutBracketMatches,
+  getTournamentChampion,
+  listGroupResults,
+  listGroupTeams,
+  listKnockoutMatches,
+  type GroupTeamRecord,
+  type KnockoutMatchRecord,
+  type TeamRecord,
+} from "@/database/repositories";
 import type { StandingRow } from "@/domain/types";
 
 export default function StandingsScreen() {
   const db = useSQLiteContext();
   const [teams, setTeams] = useState<GroupTeamRecord[]>([]);
   const [results, setResults] = useState<Awaited<ReturnType<typeof listGroupResults>>>([]);
+  const [knockoutMatches, setKnockoutMatches] = useState<KnockoutMatchRecord[]>([]);
+  const [champion, setChampion] = useState<TeamRecord | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<"ALL" | "A" | "B">("ALL");
+  const [message, setMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       setTeams(await listGroupTeams(db, DEFAULT_TOURNAMENT_ID));
       setResults(await listGroupResults(db, DEFAULT_TOURNAMENT_ID));
+      setKnockoutMatches(await listKnockoutMatches(db, DEFAULT_TOURNAMENT_ID));
+      setChampion(await getTournamentChampion(db, DEFAULT_TOURNAMENT_ID));
     } catch {
       // Ignorar error si base no está lista
     }
   }, [db]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
   const getRowsForGroup = (groupId: "A" | "B"): StandingRow[] => {
     const groupTeams = teams
@@ -43,7 +58,25 @@ export default function StandingsScreen() {
   const rowsB = getRowsForGroup("B");
   const bracket = buildSemifinalBracket(rowsA, rowsB);
 
+  async function generateBracket() {
+    if (!bracket) {
+      setMessage("No se puede generar el cuadro: la clasificación tiene empates sin resolver.");
+      return;
+    }
+    try {
+      await createKnockoutBracketMatches(db, DEFAULT_TOURNAMENT_ID, bracket);
+      await load();
+      setMessage(null);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "No se pudo activar la Fase Final.");
+    }
+  }
+
   const getTeamName = (teamId: string) => teams.find((t) => t.id === teamId)?.name ?? teamId;
+
+  const sf1 = knockoutMatches.find((m) => m.id === "sf-1");
+  const sf2 = knockoutMatches.find((m) => m.id === "sf-2");
+  const finalMatch = knockoutMatches.find((m) => m.id === "final");
 
   const renderGroupTable = (groupId: "A" | "B", rows: StandingRow[]) => {
     const courtName = groupId === "A" ? "Cancha 1" : "Cancha 2";
@@ -65,7 +98,6 @@ export default function StandingsScreen() {
           </View>
         ) : (
           <>
-            {/* Cabecera de columnas */}
             <View style={styles.tableHeaderRow}>
               <Text style={[styles.colHeader, styles.colPos]}>#</Text>
               <Text style={[styles.colHeader, styles.colTeam]}>EQUIPO</Text>
@@ -132,6 +164,93 @@ export default function StandingsScreen() {
     );
   };
 
+  const renderKnockoutMatchBox = (
+    label: string,
+    matchRecord: KnockoutMatchRecord | undefined,
+    homeSeed: string,
+    awaySeed: string,
+    defaultHomeName: string,
+    defaultAwayName: string,
+    isFinal = false
+  ) => {
+    const isLive = matchRecord?.status === "in_progress";
+    const isDone = matchRecord?.status === "completed" || matchRecord?.status === "walkover";
+    const homeName = matchRecord ? matchRecord.homeName : defaultHomeName;
+    const awayName = matchRecord ? matchRecord.awayName : defaultAwayName;
+
+    return (
+      <View style={[styles.matchupBox, isFinal && styles.finalMatchupBox]} key={label}>
+        <View style={styles.matchupTagRow}>
+          <Text style={[styles.matchupTag, isFinal && styles.finalTag]}>{label.toUpperCase()}</Text>
+          <View
+            style={[
+              styles.statusPill,
+              isLive ? styles.statusLive : isDone ? styles.statusDone : styles.statusScheduled,
+            ]}
+          >
+            <Text
+              style={[
+                styles.statusText,
+                isLive ? styles.statusLiveText : isDone ? styles.statusDoneText : styles.statusScheduledText,
+              ]}
+            >
+              {isLive ? "EN VIVO" : isDone ? "FINALIZADO" : matchRecord ? "PROGRAMADO" : "PENDIENTE"}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.matchupTeams}>
+          <View style={styles.matchupTeamRow}>
+            <Text style={styles.matchupSeed}>{homeSeed}</Text>
+            <Text
+              style={[
+                styles.matchupTeamName,
+                matchRecord?.winner === "home" && styles.winnerName,
+              ]}
+            >
+              {homeName}
+            </Text>
+            {matchRecord && (
+              <Text style={styles.setsSummaryText}>
+                {matchRecord.sets.map((s) => s.home).join(" - ")}
+              </Text>
+            )}
+          </View>
+
+          <Text style={styles.matchupVs}>VS</Text>
+
+          <View style={styles.matchupTeamRow}>
+            <Text style={styles.matchupSeed}>{awaySeed}</Text>
+            <Text
+              style={[
+                styles.matchupTeamName,
+                matchRecord?.winner === "away" && styles.winnerName,
+              ]}
+            >
+              {awayName}
+            </Text>
+            {matchRecord && (
+              <Text style={styles.setsSummaryText}>
+                {matchRecord.sets.map((s) => s.away).join(" - ")}
+              </Text>
+            )}
+          </View>
+        </View>
+
+        {matchRecord ? (
+          <Pressable
+            onPress={() => router.push(`/live-score?matchId=${encodeURIComponent(matchRecord.id)}`)}
+            style={({ pressed }) => [styles.matchActionBtn, isFinal && styles.finalActionBtn, pressed && styles.pressed]}
+          >
+            <Text style={styles.matchActionBtnText}>
+              {isLive ? "Mesa de Control en Vivo ⚡" : isDone ? "Ver resultado oficial ›" : "Iniciar partido y marcador ›"}
+            </Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
@@ -144,6 +263,16 @@ export default function StandingsScreen() {
         <Text style={styles.subtitle}>
           Cálculo automático: Victoria 2 pts · Derrota jugada 1 pt · W.O. 0 pts
         </Text>
+
+        {/* Banner de Campeón si el torneo ha concluido */}
+        {champion && (
+          <View style={styles.championCard}>
+            <Text style={styles.championEyebrow}>🏆 CAMPEÓN OFICIAL DEL TORNEO</Text>
+            <Text style={styles.championName}>{champion.name}</Text>
+            <Text style={styles.championPrize}>Premio Único: $360.000 COP</Text>
+            <Text style={styles.championSub}>Gamma Voley Club & GAM Logística 2026</Text>
+          </View>
+        )}
 
         {/* Selector de Grupos */}
         <View style={styles.filterRow}>
@@ -177,77 +306,57 @@ export default function StandingsScreen() {
         {(selectedGroup === "ALL" || selectedGroup === "A") && renderGroupTable("A", rowsA)}
         {(selectedGroup === "ALL" || selectedGroup === "B") && renderGroupTable("B", rowsB)}
 
-        {/* Cuadro Didáctico de Fase Final (Semifinales y Final) */}
+        {/* Mensaje de error / advertencia */}
+        {message && <Text style={styles.messageText}>{message}</Text>}
+
+        {/* Cuadro Oficial de Fase Final (Semifinales y Gran Final) */}
         <View style={styles.bracketCard}>
           <View style={styles.bracketHeader}>
-            <Text style={styles.bracketEyebrow}>DOMINGO 15 DE NOVIEMBRE</Text>
+            <Text style={styles.bracketEyebrow}>DOMINGO 15 DE NOVIEMBRE · PLAYOFFS</Text>
             <Text style={styles.bracketTitle}>Cuadro de Semifinales y Final</Text>
             <Text style={styles.bracketDesc}>
-              Cruces oficiales: 1º del Grupo A vs 2º del Grupo B y 1º del Grupo B vs 2º del Grupo A.
+              Cruces oficiales: 1º Grupo A vs 2º Grupo B y 1º Grupo B vs 2º Grupo A.
               Series al mejor de 3 sets a 21 puntos (ventaja de 2 sin tope).
             </Text>
           </View>
 
+          {/* Botón para Activar / Generar Semifinales si aún no existen */}
+          {knockoutMatches.length === 0 && bracket && (
+            <Pressable onPress={() => void generateBracket()} style={styles.activateBracketBtn}>
+              <Text style={styles.activateBracketText}>⚡ Activar y Generar Semifinales</Text>
+            </Pressable>
+          )}
+
           {/* Semifinal 1 */}
-          <View style={styles.matchupBox}>
-            <View style={styles.matchupTagRow}>
-              <Text style={styles.matchupTag}>SEMIFINAL 1</Text>
-              <Text style={styles.matchupStatus}>
-                {bracket ? "Cruce Definido" : "Provisional según tabla"}
-              </Text>
-            </View>
-            <View style={styles.matchupTeams}>
-              <View style={styles.matchupTeamRow}>
-                <Text style={styles.matchupSeed}>1º A</Text>
-                <Text style={styles.matchupTeamName}>
-                  {rowsA[0] ? getTeamName(rowsA[0].teamId) : "1º del Grupo A"}
-                </Text>
-              </View>
-              <Text style={styles.matchupVs}>VS</Text>
-              <View style={styles.matchupTeamRow}>
-                <Text style={styles.matchupSeed}>2º B</Text>
-                <Text style={styles.matchupTeamName}>
-                  {rowsB[1] ? getTeamName(rowsB[1].teamId) : "2º del Grupo B"}
-                </Text>
-              </View>
-            </View>
-          </View>
+          {renderKnockoutMatchBox(
+            "Semifinal 1 (Cancha 1)",
+            sf1,
+            "1º A",
+            "2º B",
+            rowsA[0] ? getTeamName(rowsA[0].teamId) : "1º del Grupo A",
+            rowsB[1] ? getTeamName(rowsB[1].teamId) : "2º del Grupo B"
+          )}
 
           {/* Semifinal 2 */}
-          <View style={styles.matchupBox}>
-            <View style={styles.matchupTagRow}>
-              <Text style={styles.matchupTag}>SEMIFINAL 2</Text>
-              <Text style={styles.matchupStatus}>
-                {bracket ? "Cruce Definido" : "Provisional según tabla"}
-              </Text>
-            </View>
-            <View style={styles.matchupTeams}>
-              <View style={styles.matchupTeamRow}>
-                <Text style={styles.matchupSeed}>1º B</Text>
-                <Text style={styles.matchupTeamName}>
-                  {rowsB[0] ? getTeamName(rowsB[0].teamId) : "1º del Grupo B"}
-                </Text>
-              </View>
-              <Text style={styles.matchupVs}>VS</Text>
-              <View style={styles.matchupTeamRow}>
-                <Text style={styles.matchupSeed}>2º A</Text>
-                <Text style={styles.matchupTeamName}>
-                  {rowsA[1] ? getTeamName(rowsA[1].teamId) : "2º del Grupo A"}
-                </Text>
-              </View>
-            </View>
-          </View>
+          {renderKnockoutMatchBox(
+            "Semifinal 2 (Cancha 2)",
+            sf2,
+            "1º B",
+            "2º A",
+            rowsB[0] ? getTeamName(rowsB[0].teamId) : "1º del Grupo B",
+            rowsA[1] ? getTeamName(rowsA[1].teamId) : "2º del Grupo A"
+          )}
 
           {/* Gran Final */}
-          <View style={[styles.matchupBox, styles.finalMatchupBox]}>
-            <View style={styles.matchupTagRow}>
-              <Text style={[styles.matchupTag, styles.finalTag]}>GRAN FINAL · CAMPEONATO</Text>
-              <Text style={styles.prizeTag}>$360.000 COP al Campeón</Text>
-            </View>
-            <View style={styles.matchupTeams}>
-              <Text style={styles.finalPlaceholderText}>Ganador Semifinal 1 ⚔️ Ganador Semifinal 2</Text>
-            </View>
-          </View>
+          {renderKnockoutMatchBox(
+            "Gran Final · Campeonato",
+            finalMatch,
+            "SF 1",
+            "SF 2",
+            sf1?.winner ? (sf1.winner === "home" ? sf1.homeName : sf1.awayName) : "Ganador Semifinal 1",
+            sf2?.winner ? (sf2.winner === "home" ? sf2.homeName : sf2.awayName) : "Ganador Semifinal 2",
+            true
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -261,6 +370,20 @@ const styles = StyleSheet.create({
   eyebrow: { color: "#E53935", fontSize: 11, fontWeight: "900", letterSpacing: 1.4 },
   title: { color: "#FFF", fontSize: 28, fontWeight: "900", marginTop: 4 },
   subtitle: { color: "#A6A8AE", fontSize: 12, marginTop: 4, marginBottom: 16 },
+
+  championCard: {
+    backgroundColor: "#2B2012",
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: "#FFB300",
+    padding: 16,
+    marginBottom: 16,
+    alignItems: "center",
+  },
+  championEyebrow: { color: "#FFD54F", fontSize: 11, fontWeight: "900", letterSpacing: 1.2 },
+  championName: { color: "#FFFFFF", fontSize: 24, fontWeight: "900", marginTop: 4 },
+  championPrize: { color: "#55C77A", fontSize: 14, fontWeight: "800", marginTop: 2 },
+  championSub: { color: "#E2C98E", fontSize: 11, marginTop: 4 },
 
   filterRow: { flexDirection: "row", gap: 8, marginBottom: 16 },
   filterPill: {
@@ -358,6 +481,8 @@ const styles = StyleSheet.create({
   tieAlertTitle: { color: "#F1C46A", fontSize: 11, fontWeight: "800" },
   tieAlertText: { color: "#E2C98E", fontSize: 10, marginTop: 2, lineHeight: 14 },
 
+  messageText: { color: "#FF8D8D", fontSize: 12, marginBottom: 12, textAlign: "center" },
+
   bracketCard: {
     backgroundColor: "#17181D",
     borderRadius: 18,
@@ -371,6 +496,15 @@ const styles = StyleSheet.create({
   bracketEyebrow: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
   bracketTitle: { color: "#FFFFFF", fontSize: 18, fontWeight: "900", marginTop: 3 },
   bracketDesc: { color: "#A6A8AE", fontSize: 11, lineHeight: 16, marginTop: 4 },
+
+  activateBracketBtn: {
+    backgroundColor: "#E53935",
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  activateBracketText: { color: "#FFFFFF", fontSize: 13, fontWeight: "900" },
 
   matchupBox: {
     backgroundColor: "#1C1E23",
@@ -387,8 +521,16 @@ const styles = StyleSheet.create({
   matchupTagRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
   matchupTag: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 0.8 },
   finalTag: { color: "#FFB300" },
-  matchupStatus: { color: "#70737C", fontSize: 10, fontWeight: "700" },
-  prizeTag: { color: "#FFD54F", fontSize: 10, fontWeight: "800" },
+
+  statusPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  statusLive: { backgroundColor: "#1B3B26" },
+  statusDone: { backgroundColor: "#2B2D35" },
+  statusScheduled: { backgroundColor: "#2B2215" },
+  statusText: { fontSize: 9, fontWeight: "900" },
+  statusLiveText: { color: "#55C77A" },
+  statusDoneText: { color: "#A6A8AE" },
+  statusScheduledText: { color: "#F1C46A" },
+
   matchupTeams: { gap: 6 },
   matchupTeamRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   matchupSeed: {
@@ -401,12 +543,19 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   matchupTeamName: { color: "#FFFFFF", fontSize: 13, fontWeight: "800", flex: 1 },
+  winnerName: { color: "#55C77A" },
+  setsSummaryText: { color: "#A6A8AE", fontSize: 11, fontWeight: "800", fontVariant: ["tabular-nums"] },
+
   matchupVs: { color: "#70737C", fontSize: 10, fontWeight: "900", textAlign: "center", marginVertical: 2 },
-  finalPlaceholderText: {
-    color: "#E2C98E",
-    fontSize: 12,
-    fontWeight: "800",
-    textAlign: "center",
+
+  matchActionBtn: {
+    marginTop: 10,
     paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: "#2B2D35",
+    alignItems: "center",
   },
+  finalActionBtn: { backgroundColor: "#D84315" },
+  matchActionBtnText: { color: "#FFFFFF", fontSize: 11, fontWeight: "800" },
+  pressed: { opacity: 0.72 },
 });

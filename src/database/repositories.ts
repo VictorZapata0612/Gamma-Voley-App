@@ -1,6 +1,5 @@
 import type { SQLiteDatabase } from "expo-sqlite";
-import type { GroupId, Match, MatchResult, ScoreAction, SetScore, Team, TimeoutState } from "@/domain/types";
-import type { Player } from "@/domain/eligibility";
+import type { GroupId, Match, MatchResult, ScoreAction, SemifinalBracket, SetScore, Team, TimeoutState } from "@/domain/types";import type { Player } from "@/domain/eligibility";
 import { MAX_ROSTER_SIZE } from "@/domain/eligibility";
 import type { ScheduledGroupMatch } from "@/domain/schedule";
 import { canCloseSet, isOfficialMatchComplete } from "@/domain/liveScoring";
@@ -605,6 +604,203 @@ export function toMatchResult(match: Match & { tournamentId: string }): MatchRes
     winner: match.winner,
     ...(match.walkoverTeamId ? { walkoverTeamId: match.walkoverTeamId } : {}),
   };
+}
+
+// ==========================================
+// FASE FINAL Y PLAYOFFS (FASE 7)
+// ==========================================
+
+export type KnockoutMatchRecord = {
+  id: string;
+  label: "Semifinal 1" | "Semifinal 2" | "Gran Final";
+  homeTeamId: string;
+  awayTeamId: string;
+  homeName: string;
+  awayName: string;
+  courtNumber: number;
+  status: Match["status"];
+  winner: "home" | "away" | null;
+  currentSet: number;
+  sets: SetScore[];
+};
+
+/**
+  Verifica si todos los partidos de la fase de grupos han sido finalizados.
+ */
+export async function isGroupPhaseFinished(
+  db: SQLiteDatabase,
+  tournamentId: string
+): Promise<boolean> {
+  const pendingRow = await db.getFirstAsync<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM matches 
+     WHERE tournament_id = ? AND phase = 'group' AND status IN ('scheduled', 'in_progress')`,
+    tournamentId
+  );
+  const totalRow = await db.getFirstAsync<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM matches WHERE tournament_id = ? AND phase = 'group'`,
+    tournamentId
+  );
+  return (totalRow?.count ?? 0) > 0 && (pendingRow?.count ?? 0) === 0;
+}
+
+/**
+  Crea o actualiza los partidos oficiales de Semifinales en SQLite (sf-1 y sf-2).
+ */
+export async function createKnockoutBracketMatches(
+  db: SQLiteDatabase,
+  tournamentId: string,
+  bracket: SemifinalBracket
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db.execAsync("BEGIN TRANSACTION;");
+  try {
+    // Semifinal 1: 1º Grupo A vs 2º Grupo B (Cancha 1)
+    await db.runAsync(
+      `INSERT INTO matches (id, tournament_id, phase, home_team_id, away_team_id, court_number, status, current_set, created_at, updated_at)
+       VALUES ('sf-1', ?, 'knockout', ?, ?, 1, 'scheduled', 1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET home_team_id = excluded.home_team_id, away_team_id = excluded.away_team_id, updated_at = excluded.updated_at`,
+      tournamentId, bracket.semifinal1.homeTeamId, bracket.semifinal1.awayTeamId, now, now
+    );
+    await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('sf-1', 1, 0, 0)");
+    await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('sf-1', 2, 0, 0)");
+
+    // Semifinal 2: 1º Grupo B vs 2º Grupo A (Cancha 2)
+    await db.runAsync(
+      `INSERT INTO matches (id, tournament_id, phase, home_team_id, away_team_id, court_number, status, current_set, created_at, updated_at)
+       VALUES ('sf-2', ?, 'knockout', ?, ?, 2, 'scheduled', 1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET home_team_id = excluded.home_team_id, away_team_id = excluded.away_team_id, updated_at = excluded.updated_at`,
+      tournamentId, bracket.semifinal2.homeTeamId, bracket.semifinal2.awayTeamId, now, now
+    );
+    await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('sf-2', 1, 0, 0)");
+    await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('sf-2', 2, 0, 0)");
+
+    await db.execAsync("COMMIT;");
+  } catch (error) {
+    await db.execAsync("ROLLBACK;");
+    throw error;
+  }
+}
+
+/**
+  Verifica si ambas semifinales terminaron y crea el partido de la Gran Final con sus ganadores.
+ */
+export async function unlockFinalMatchIfReady(
+  db: SQLiteDatabase,
+  tournamentId: string
+): Promise<boolean> {
+  const sf1 = await db.getFirstAsync<{ status: string; winner: "home" | "away" | null; home_team_id: string; away_team_id: string }>(
+    "SELECT status, winner, home_team_id, away_team_id FROM matches WHERE id = 'sf-1'"
+  );
+  const sf2 = await db.getFirstAsync<{ status: string; winner: "home" | "away" | null; home_team_id: string; away_team_id: string }>(
+    "SELECT status, winner, home_team_id, away_team_id FROM matches WHERE id = 'sf-2'"
+  );
+
+  if (!sf1 || !sf2) return false;
+  const sf1Done = sf1.status === "completed" || sf1.status === "walkover";
+  const sf2Done = sf2.status === "completed" || sf2.status === "walkover";
+
+  if (sf1Done && sf2Done && sf1.winner && sf2.winner) {
+    const winner1Id = sf1.winner === "home" ? sf1.home_team_id : sf1.away_team_id;
+    const winner2Id = sf2.winner === "home" ? sf2.home_team_id : sf2.away_team_id;
+    const now = new Date().toISOString();
+
+    await db.execAsync("BEGIN TRANSACTION;");
+    try {
+      await db.runAsync(
+        `INSERT INTO matches (id, tournament_id, phase, home_team_id, away_team_id, court_number, status, current_set, created_at, updated_at)
+         VALUES ('final', ?, 'knockout', ?, ?, 1, 'scheduled', 1, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET home_team_id = excluded.home_team_id, away_team_id = excluded.away_team_id, updated_at = excluded.updated_at`,
+        tournamentId, winner1Id, winner2Id, now, now
+      );
+      await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('final', 1, 0, 0)");
+      await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('final', 2, 0, 0)");
+      await db.execAsync("COMMIT;");
+      return true;
+    } catch (error) {
+      await db.execAsync("ROLLBACK;");
+      throw error;
+    }
+  }
+  return false;
+}
+
+/**
+  Obtiene la lista de partidos de la Fase Final (SF1, SF2 y Final si existe).
+ */
+export async function listKnockoutMatches(
+  db: SQLiteDatabase,
+  tournamentId: string
+): Promise<KnockoutMatchRecord[]> {
+  await unlockFinalMatchIfReady(db, tournamentId);
+
+  const rows = await db.getAllAsync<{
+    id: string;
+    home_team_id: string;
+    away_team_id: string;
+    home_name: string;
+    away_name: string;
+    court_number: number;
+    status: Match["status"];
+    winner: "home" | "away" | null;
+    current_set: number;
+  }>(
+    `SELECT m.id, m.home_team_id, m.away_team_id, home.name AS home_name, away.name AS away_name,
+            COALESCE(m.court_number, 1) AS court_number, m.status, m.winner, m.current_set
+     FROM matches m
+     JOIN teams home ON home.id = m.home_team_id
+     JOIN teams away ON away.id = m.away_team_id
+     WHERE m.tournament_id = ? AND m.phase = 'knockout'
+     ORDER BY CASE WHEN m.id = 'sf-1' THEN 1 WHEN m.id = 'sf-2' THEN 2 ELSE 3 END`,
+    tournamentId
+  );
+
+  const results: KnockoutMatchRecord[] = [];
+  for (const r of rows) {
+    const sets = await db.getAllAsync<{ home_points: number; away_points: number }>(
+      "SELECT home_points, away_points FROM match_sets WHERE match_id = ? ORDER BY set_number",
+      r.id
+    );
+    results.push({
+      id: r.id,
+      label: r.id === "sf-1" ? "Semifinal 1" : r.id === "sf-2" ? "Semifinal 2" : "Gran Final",
+      homeTeamId: r.home_team_id,
+      awayTeamId: r.away_team_id,
+      homeName: r.home_name,
+      awayName: r.away_name,
+      courtNumber: r.court_number,
+      status: r.status,
+      winner: r.winner,
+      currentSet: r.current_set,
+      sets: sets.map((s) => ({ home: s.home_points, away: s.away_points })),
+    });
+  }
+
+  return results;
+}
+
+/**
+  Retorna el registro del equipo Campeón si la Gran Final ha terminado.
+ */
+export async function getTournamentChampion(
+  db: SQLiteDatabase,
+  tournamentId: string
+): Promise<TeamRecord | null> {
+  const finalMatch = await db.getFirstAsync<{
+    status: string;
+    winner: "home" | "away" | null;
+    home_team_id: string;
+    away_team_id: string;
+  }>(
+    "SELECT status, winner, home_team_id, away_team_id FROM matches WHERE id = 'final' AND tournament_id = ?",
+    tournamentId
+  );
+
+  if (!finalMatch || (finalMatch.status !== "completed" && finalMatch.status !== "walkover") || !finalMatch.winner) {
+    return null;
+  }
+
+  const championTeamId = finalMatch.winner === "home" ? finalMatch.home_team_id : finalMatch.away_team_id;
+  return getTeamRecord(db, championTeamId);
 }
 
 export type { MatchRow, SetScore };

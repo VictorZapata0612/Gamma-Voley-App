@@ -32,7 +32,6 @@ export interface RemoteSyncProvider {
  */
 export const MockRemoteProvider: RemoteSyncProvider = {
   async pushOperation(_item: SyncQueueItem) {
-    // Simula latencia de red de 50ms
     await new Promise((resolve) => setTimeout(resolve, 50));
     return { success: true };
   },
@@ -74,6 +73,216 @@ export async function getPendingSyncOperations(
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));
+}
+
+/**
+ * Recopila la totalidad de registros existentes en SQLite (Torneo, Equipos, Jugadores,
+ * Partidos, Sets, Eventos de Marcador, Tiempos Muertos) y los re-encola en la cola
+ * con estado 'pending' e intentos en 0 para forzar una resincronización completa.
+ */
+export async function requeueAndResetAllData(db: SQLiteDatabase): Promise<void> {
+  const now = new Date().toISOString();
+
+  // 1. Restablecer registros previos
+  await db.runAsync(
+    "UPDATE sync_queue SET status = 'pending', attempts = 0, last_error = NULL, updated_at = ?",
+    now
+  );
+
+  // 2. Re-encolar Torneos
+  const tournaments = await db.getAllAsync<{
+    id: string;
+    name: string;
+    category: string;
+    starts_on: string;
+    ends_on: string;
+    max_teams: number;
+    court_count: number;
+    created_at: string;
+    updated_at: string;
+  }>("SELECT * FROM tournaments");
+  for (const t of tournaments) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+       VALUES (?, 'tournament', ?, 'save_tournament', ?, 'pending', 0, NULL, ?, ?)`,
+      `requeue-tour-${t.id}`,
+      t.id,
+      JSON.stringify(t),
+      now,
+      now
+    );
+  }
+
+  // 3. Re-encolar Equipos
+  const teams = await db.getAllAsync<{
+    id: string;
+    tournament_id: string;
+    name: string;
+    captain_name: string | null;
+    contact: string | null;
+    registration_status: string;
+    payment_status: string;
+  }>("SELECT * FROM teams");
+  for (const team of teams) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+       VALUES (?, 'team', ?, 'save_team', ?, 'pending', 0, NULL, ?, ?)`,
+      `requeue-team-${team.id}`,
+      team.id,
+      JSON.stringify({
+        tournamentId: team.tournament_id,
+        name: team.name,
+        captainName: team.captain_name,
+        contact: team.contact,
+        registrationStatus: team.registration_status,
+        paymentStatus: team.payment_status,
+      }),
+      now,
+      now
+    );
+  }
+
+  // 4. Re-encolar Jugadores
+  const players = await db.getAllAsync<{
+    id: string;
+    team_id: string;
+    name: string;
+    gender: string;
+    jersey_number: number | null;
+    eligibility_status: string;
+  }>("SELECT * FROM players");
+  for (const p of players) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+       VALUES (?, 'player', ?, 'save_player', ?, 'pending', 0, NULL, ?, ?)`,
+      `requeue-player-${p.id}`,
+      p.id,
+      JSON.stringify({
+        teamId: p.team_id,
+        name: p.name,
+        gender: p.gender,
+        jerseyNumber: p.jersey_number,
+        eligibility: p.eligibility_status,
+      }),
+      now,
+      now
+    );
+  }
+
+  // 5. Re-encolar Partidos
+  const matches = await db.getAllAsync<{
+    id: string;
+    tournament_id: string;
+    phase: string;
+    group_id: string | null;
+    home_team_id: string;
+    away_team_id: string;
+    court_number: number | null;
+    status: string;
+    winner: string | null;
+    current_set: number;
+  }>("SELECT * FROM matches");
+  for (const m of matches) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+       VALUES (?, 'match', ?, 'save_match', ?, 'pending', 0, NULL, ?, ?)`,
+      `requeue-match-${m.id}`,
+      m.id,
+      JSON.stringify({
+        id: m.id,
+        tournamentId: m.tournament_id,
+        phase: m.phase,
+        groupId: m.group_id,
+        homeTeamId: m.home_team_id,
+        awayTeamId: m.away_team_id,
+        courtNumber: m.court_number,
+        status: m.status,
+        winner: m.winner,
+        currentSet: m.current_set,
+      }),
+      now,
+      now
+    );
+  }
+
+  // 6. Re-encolar Sets
+  const sets = await db.getAllAsync<{
+    match_id: string;
+    set_number: number;
+    home_points: number;
+    away_points: number;
+    closed_at: string | null;
+  }>("SELECT * FROM match_sets");
+  for (const s of sets) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+       VALUES (?, 'match_set', ?, 'save_set', ?, 'pending', 0, NULL, ?, ?)`,
+      `requeue-set-${s.match_id}-${s.set_number}`,
+      s.match_id,
+      JSON.stringify({
+        matchId: s.match_id,
+        setNumber: s.set_number,
+        homePoints: s.home_points,
+        awayPoints: s.away_points,
+        closedAt: s.closed_at,
+      }),
+      now,
+      now
+    );
+  }
+
+  // 7. Re-encolar Eventos de Marcador (Puntos)
+  const events = await db.getAllAsync<{
+    id: string;
+    match_id: string;
+    set_number: number;
+    team: string;
+    delta: number;
+    reason: string | null;
+    created_at: string;
+  }>("SELECT * FROM score_events");
+  for (const e of events) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+       VALUES (?, 'score_event', ?, 'record_score_action', ?, 'pending', 0, NULL, ?, ?)`,
+      `requeue-event-${e.id}`,
+      e.id,
+      JSON.stringify({
+        matchId: e.match_id,
+        setNumber: e.set_number,
+        team: e.team,
+        delta: e.delta,
+        reason: e.reason,
+        createdAt: e.created_at,
+      }),
+      now,
+      now
+    );
+  }
+
+  // 8. Re-encolar Tiempos Muertos
+  const timeouts = await db.getAllAsync<{
+    match_id: string;
+    set_number: number;
+    team: string;
+    used_at: string;
+  }>("SELECT * FROM timeouts");
+  for (const to of timeouts) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+       VALUES (?, 'timeout', ?, 'use_timeout', ?, 'pending', 0, NULL, ?, ?)`,
+      `requeue-to-${to.match_id}-${to.set_number}-${to.team}`,
+      to.match_id,
+      JSON.stringify({
+        matchId: to.match_id,
+        setNumber: to.set_number,
+        team: to.team,
+        usedAt: to.used_at,
+      }),
+      now,
+      now
+    );
+  }
 }
 
 /**

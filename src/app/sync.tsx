@@ -1,292 +1,621 @@
-import { router, useFocusEffect } from "expo-router";
-import { useCallback, useState } from "react";
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
-import { useSQLiteContext } from "expo-sqlite";
-import {
-  getPendingSyncOperations,
-  getSyncQueueStats,
-  processSyncQueue,
-  type SyncQueueItem,
-  type SyncResult,
-} from "@/services/sync";
-import {
-  generateOfficialTextReport,
-  generateTournamentMemoryJson,
-} from "@/services/export";
 
-export default function SyncScreen() {
-  const db = useSQLiteContext();
-  const [stats, setStats] = useState({ pendingCount: 0, syncedCount: 0, errorCount: 0 });
-  const [pendingItems, setPendingItems] = useState<SyncQueueItem[]>([]);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSyncResult, setLastSyncResult] = useState<SyncResult | null>(null);
-  const [reportText, setReportText] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+import type { SQLiteDatabase } from "expo-sqlite";
 
-  const loadData = useCallback(async () => {
-    try {
-      setStats(await getSyncQueueStats(db));
-      setPendingItems(await getPendingSyncOperations(db));
-      setError(null);
-    } catch {
-      setError("No se pudo cargar el estado de sincronización desde SQLite.");
-    }
-  }, [db]);
+export type SyncQueueItem = {
+  operationId: string;
+  entityType: string;
+  entityId: string;
+  operation: string;
+  payloadJson: string;
+  status: "pending" | "synced" | "error" | "conflict";
+  attempts: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
 
-  useFocusEffect(
-    useCallback(() => {
-      void loadData();
-    }, [loadData])
+export type SyncResult = {
+  processedCount: number;
+  successCount: number;
+  failedCount: number;
+  errors: Array<{ operationId: string; error: string }>;
+};
+
+export interface RemoteSyncProvider {
+  pushOperation(
+    item: SyncQueueItem
+  ): Promise<{ success: boolean; error?: string }>;
+}
+
+export const MockRemoteProvider: RemoteSyncProvider = {
+  async pushOperation(_item: SyncQueueItem) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { success: true };
+  },
+};
+
+type QueueRow = {
+  operation_id: string;
+  entity_type: string;
+  entity_id: string;
+  operation: string;
+  payload_json: string;
+  status: SyncQueueItem["status"];
+  attempts: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+const MAX_SYNC_ATTEMPTS = 5;
+
+// Impide ejecuciones simultáneas de processSyncQueue sobre el mismo objeto DB.
+const databasesBeingProcessed = new WeakSet<object>();
+
+function toSyncQueueItem(row: QueueRow): SyncQueueItem {
+  return {
+    operationId: row.operation_id,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    operation: row.operation,
+    payloadJson: row.payload_json,
+    status: row.status,
+    attempts: row.attempts,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * Las dependencias se ordenan primero por tipo de operación.
+ * Dentro de cada prioridad se mantiene el orden temporal de la cola.
+ */
+function getOperationPriority(item: SyncQueueItem): number {
+  if (
+    item.entityType === "tournament" ||
+    item.operation === "save_tournament"
+  ) {
+    return 0;
+  }
+
+  if (item.entityType === "team" || item.operation === "save_team") {
+    return 1;
+  }
+
+  if (item.entityType === "player" || item.operation === "save_player") {
+    return 2;
+  }
+
+  if (item.entityType === "match" && item.operation === "save_match") {
+    return 3;
+  }
+
+  if (
+    item.entityType === "match_set" ||
+    item.operation === "save_set"
+  ) {
+    return 4;
+  }
+
+  if (
+    item.operation === "record_score_action" ||
+    item.operation === "score_correction" ||
+    item.entityType === "score_event"
+  ) {
+    return 5;
+  }
+
+  if (
+    item.operation === "use_timeout" ||
+    item.entityType === "timeout"
+  ) {
+    return 6;
+  }
+
+  if (item.entityType === "audit_log") {
+    return 7;
+  }
+
+  // Las operaciones desconocidas se procesan al final y el proveedor
+  // debe devolver un error explícito para ellas.
+  return 99;
+}
+
+function sortSyncOperations(items: SyncQueueItem[]): SyncQueueItem[] {
+  return [...items].sort((a, b) => {
+    const priorityDifference =
+      getOperationPriority(a) - getOperationPriority(b);
+
+    if (priorityDifference !== 0) return priorityDifference;
+
+    const timeDifference = a.createdAt.localeCompare(b.createdAt);
+    if (timeDifference !== 0) return timeDifference;
+
+    return a.operationId.localeCompare(b.operationId);
+  });
+}
+
+/**
+ * Obtiene operaciones pendientes y errores que aún pueden reintentarse.
+ */
+export async function getPendingSyncOperations(
+  db: SQLiteDatabase
+): Promise<SyncQueueItem[]> {
+  const rows = await db.getAllAsync<QueueRow>(
+    `SELECT
+       operation_id,
+       entity_type,
+       entity_id,
+       operation,
+       payload_json,
+       status,
+       attempts,
+       last_error,
+       created_at,
+       updated_at
+     FROM sync_queue
+     WHERE status IN ('pending', 'error')
+       AND attempts < ?
+     ORDER BY created_at ASC`,
+    MAX_SYNC_ATTEMPTS
   );
 
-  async function handleSyncNow() {
-    setIsSyncing(true);
-    setError(null);
-    try {
-      const res = await processSyncQueue(db);
-      setLastSyncResult(res);
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error durante la sincronización.");
-    } finally {
-      setIsSyncing(false);
-    }
-  }
+  return sortSyncOperations(rows.map(toSyncQueueItem));
+}
 
-  async function handleGenerateReport() {
-    try {
-      const memory = await generateTournamentMemoryJson(db);
-      const text = generateOfficialTextReport(memory);
-      setReportText(text);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo generar el acta oficial.");
-    }
-  }
-
-  return (
-    <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => router.back()}>
-          <Text style={styles.back}>‹ Inicio</Text>
-        </Pressable>
-
-        <Text style={styles.eyebrow}>RESPALDO Y NUBE · PERSISTENCIA LOCAL</Text>
-        <Text style={styles.title}>Sincronización y Auditoría</Text>
-        <Text style={styles.subtitle}>
-          Monitoreo en tiempo real de la cola offline de SQLite, réplica remota y actas oficiales.
-        </Text>
-
-        {/* Tarjetas de Métricas de Cola */}
-        <View style={styles.statsRow}>
-          <View style={[styles.statBox, stats.pendingCount > 0 && styles.statBoxPending]}>
-            <Text style={[styles.statNumber, stats.pendingCount > 0 && styles.statNumberPending]}>
-              {stats.pendingCount}
-            </Text>
-            <Text style={styles.statLabel}>Pendientes</Text>
-          </View>
-
-          <View style={styles.statBox}>
-            <Text style={[styles.statNumber, styles.statNumberSynced]}>{stats.syncedCount}</Text>
-            <Text style={styles.statLabel}>Sincronizados</Text>
-          </View>
-
-          <View style={[styles.statBox, stats.errorCount > 0 && styles.statBoxError]}>
-            <Text style={[styles.statNumber, stats.errorCount > 0 && styles.statNumberError]}>
-              {stats.errorCount}
-            </Text>
-            <Text style={styles.statLabel}>Con Error</Text>
-          </View>
-        </View>
-
-        {/* Botón de Sincronización Manual */}
-        <Pressable
-          onPress={() => void handleSyncNow()}
-          disabled={isSyncing}
-          style={({ pressed }) => [styles.syncButton, isSyncing && styles.syncButtonDisabled, pressed && styles.pressed]}
-        >
-          {isSyncing ? (
-            <ActivityIndicator color="#FFFFFF" size="small" />
-          ) : (
-            <Text style={styles.syncButtonText}>⚡ Sincronizar Cola Remota</Text>
-          )}
-        </Pressable>
-
-        {/* Módulo de Exportación de Memoria de Torneo */}
-        <View style={styles.exportBox}>
-          <Text style={styles.exportTitle}>📋 Auditoría e Informe del Torneo</Text>
-          <Text style={styles.exportSub}>
-            Genera la memoria completa con nóminas, estadísticas, partidos y ganador oficial.
-          </Text>
-          <Pressable
-            onPress={() => void handleGenerateReport()}
-            style={({ pressed }) => [styles.exportBtn, pressed && styles.pressed]}
-          >
-            <Text style={styles.exportBtnText}>📄 Generar Acta Oficial de Auditoría</Text>
-          </Pressable>
-
-          {reportText && (
-            <View style={styles.reportPreviewCard}>
-              <Text style={styles.reportPreviewTitle}>Vista Previa del Reporte Oficial:</Text>
-              <Text style={styles.reportCodeText}>{reportText}</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Resultados del último intento */}
-        {lastSyncResult && (
-          <View style={styles.resultCard}>
-            <Text style={styles.resultTitle}>Último Intento de Sincronización</Text>
-            <Text style={styles.resultText}>
-              • Procesados: {lastSyncResult.processedCount}{"\n"}
-              • Exitosos: {lastSyncResult.successCount}{"\n"}
-              • Fallidos: {lastSyncResult.failedCount}
-            </Text>
-          </View>
-        )}
-
-        {error && <Text style={styles.errorText}>{error}</Text>}
-
-        {/* Lista de Operaciones Pendientes */}
-        <Text style={styles.sectionTitle}>Cola de Eventos Registrados ({pendingItems.length})</Text>
-
-        {pendingItems.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyIcon}>✅</Text>
-            <Text style={styles.emptyTitle}>Todo al día con el servidor</Text>
-            <Text style={styles.emptyText}>
-              No hay operaciones locales pendientes por sincronizar en este dispositivo.
-            </Text>
-          </View>
-        ) : (
-          pendingItems.map((item) => (
-            <View style={styles.itemCard} key={item.operationId}>
-              <View style={styles.itemTopRow}>
-                <View style={styles.entityTag}>
-                  <Text style={styles.entityTagText}>{item.entityType.toUpperCase()}</Text>
-                </View>
-                <Text style={styles.statusTag}>{item.status.toUpperCase()}</Text>
-              </View>
-
-              <Text style={styles.itemOpText}>Operación: {item.operation}</Text>
-              <Text style={styles.itemIdText}>ID: {item.entityId}</Text>
-              {item.lastError && (
-                <Text style={styles.itemErrorText}>Error: {item.lastError}</Text>
-              )}
-            </View>
-          ))
-        )}
-      </ScrollView>
-    </SafeAreaView>
+async function enqueueSnapshot(
+  db: SQLiteDatabase,
+  operationId: string,
+  entityType: string,
+  entityId: string,
+  operation: string,
+  payload: unknown,
+  now: string
+): Promise<void> {
+  await db.runAsync(
+    `INSERT INTO sync_queue (
+       operation_id,
+       entity_type,
+       entity_id,
+       operation,
+       payload_json,
+       status,
+       attempts,
+       last_error,
+       created_at,
+       updated_at
+     ) VALUES (?, ?, ?, ?, ?, 'pending', 0, NULL, ?, ?)`,
+    operationId,
+    entityType,
+    entityId,
+    operation,
+    JSON.stringify(payload),
+    now,
+    now
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#101114" },
-  container: { flexGrow: 1, padding: 18, paddingTop: 20, paddingBottom: 36 },
-  back: { color: "#E53935", fontSize: 14, fontWeight: "700", marginBottom: 18 },
-  eyebrow: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
-  title: { color: "#FFF", fontSize: 28, fontWeight: "900", marginTop: 4 },
-  subtitle: { color: "#A6A8AE", fontSize: 12, marginTop: 4, marginBottom: 16 },
+/**
+ * Reconstruye la cola de sincronización a partir de los datos locales.
+ *
+ * IMPORTANTE:
+ * - No elimina ni modifica torneos, equipos, partidos, sets ni eventos.
+ * - Sí reemplaza el contenido de sync_queue, incluidos sus estados e historial
+ *   de reintentos. No ejecutar durante una sincronización en curso.
+ * - Los conflictos detallados en sync_conflicts no se eliminan.
+ */
+export async function requeueAndResetAllData(
+  db: SQLiteDatabase
+): Promise<void> {
+  const now = new Date().toISOString();
 
-  statsRow: { flexDirection: "row", gap: 8, marginBottom: 16 },
-  statBox: {
-    flex: 1,
-    backgroundColor: "#17181D",
-    borderRadius: 14,
-    padding: 12,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#2B2D35",
-  },
-  statBoxPending: { borderColor: "#F57C00", backgroundColor: "#23180D" },
-  statBoxError: { borderColor: "#E53935", backgroundColor: "#231214" },
-  statNumber: { color: "#FFF", fontSize: 22, fontWeight: "900" },
-  statNumberPending: { color: "#FFB74D" },
-  statNumberSynced: { color: "#81C784" },
-  statNumberError: { color: "#FF8D8D" },
-  statLabel: { color: "#70737C", fontSize: 10, fontWeight: "800", marginTop: 2 },
+  await db.execAsync("BEGIN IMMEDIATE;");
 
-  syncButton: {
-    backgroundColor: "#E53935",
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  syncButtonDisabled: { opacity: 0.6 },
-  syncButtonText: { color: "#FFF", fontSize: 14, fontWeight: "900" },
+  try {
+    // Elimina solo la cola; no elimina datos de negocio.
+    await db.runAsync("DELETE FROM sync_queue");
 
-  exportBox: {
-    backgroundColor: "#17181D",
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
-    marginBottom: 16,
-  },
-  exportTitle: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
-  exportSub: { color: "#A6A8AE", fontSize: 11, marginTop: 2, marginBottom: 10 },
-  exportBtn: {
-    backgroundColor: "#2B2D35",
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: "center",
-  },
-  exportBtnText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
+    // 1. Torneos
+    const tournaments = await db.getAllAsync<{
+      id: string;
+      name: string;
+      category: string;
+      starts_on: string;
+      ends_on: string;
+      max_teams: number;
+      court_count: number;
+      created_at: string;
+      updated_at: string;
+    }>("SELECT * FROM tournaments");
 
-  reportPreviewCard: {
-    backgroundColor: "#101114",
-    borderRadius: 10,
-    padding: 12,
-    marginTop: 12,
-    borderWidth: 1,
-    borderColor: "#333540",
-  },
-  reportPreviewTitle: { color: "#81C784", fontSize: 11, fontWeight: "800", marginBottom: 6 },
-  reportCodeText: { color: "#C2C4CA", fontSize: 10, fontFamily: "monospace", lineHeight: 14 },
+    for (const t of tournaments) {
+      await enqueueSnapshot(
+        db,
+        `requeue-tour-${t.id}`,
+        "tournament",
+        t.id,
+        "save_tournament",
+        t,
+        now
+      );
+    }
 
-  resultCard: {
-    backgroundColor: "#1C1E23",
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
-    marginBottom: 16,
-  },
-  resultTitle: { color: "#81C784", fontSize: 12, fontWeight: "800", marginBottom: 4 },
-  resultText: { color: "#A6A8AE", fontSize: 11, lineHeight: 16 },
+    // 2. Equipos
+    const teams = await db.getAllAsync<{
+      id: string;
+      tournament_id: string;
+      name: string;
+      captain_name: string | null;
+      contact: string | null;
+      registration_status: string;
+      payment_status: string;
+      created_at: string;
+      updated_at: string;
+    }>("SELECT * FROM teams");
 
-  sectionTitle: { color: "#FFF", fontSize: 15, fontWeight: "800", marginBottom: 10 },
+    for (const team of teams) {
+      await enqueueSnapshot(
+        db,
+        `requeue-team-${team.id}`,
+        "team",
+        team.id,
+        "save_team",
+        {
+          id: team.id,
+          tournamentId: team.tournament_id,
+          name: team.name,
+          captainName: team.captain_name,
+          contact: team.contact,
+          registrationStatus: team.registration_status,
+          paymentStatus: team.payment_status,
+          createdAt: team.created_at,
+          updatedAt: team.updated_at,
+        },
+        now
+      );
+    }
 
-  emptyCard: {
-    backgroundColor: "#17181D",
-    borderRadius: 16,
-    padding: 24,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#2B2D35",
-  },
-  emptyIcon: { fontSize: 32, marginBottom: 8 },
-  emptyTitle: { color: "#FFF", fontSize: 14, fontWeight: "800" },
-  emptyText: { color: "#70737C", fontSize: 11, textAlign: "center", marginTop: 4 },
+    // 3. Jugadores
+    const players = await db.getAllAsync<{
+      id: string;
+      team_id: string;
+      name: string;
+      gender: string;
+      jersey_number: number | null;
+      eligibility_status: string;
+      created_at: string;
+      updated_at: string;
+    }>("SELECT * FROM players");
 
-  itemCard: {
-    backgroundColor: "#1C1E23",
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
-  },
-  itemTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
-  entityTag: { backgroundColor: "#2B2D35", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  entityTagText: { color: "#A6A8AE", fontSize: 9, fontWeight: "900" },
-  statusTag: { color: "#FFB74D", fontSize: 9, fontWeight: "900" },
-  itemOpText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
-  itemIdText: { color: "#70737C", fontSize: 10, marginTop: 2 },
-  itemErrorText: { color: "#FF8D8D", fontSize: 10, marginTop: 4 },
+    for (const player of players) {
+      await enqueueSnapshot(
+        db,
+        `requeue-player-${player.id}`,
+        "player",
+        player.id,
+        "save_player",
+        {
+          id: player.id,
+          teamId: player.team_id,
+          name: player.name,
+          gender: player.gender,
+          jerseyNumber: player.jersey_number,
+          eligibility: player.eligibility_status,
+          createdAt: player.created_at,
+          updatedAt: player.updated_at,
+        },
+        now
+      );
+    }
 
-  errorText: { color: "#FF8D8D", fontSize: 12, marginBottom: 12, textAlign: "center" },
-  pressed: { opacity: 0.72 },
-});
+    // 4. Partidos
+    const matches = await db.getAllAsync<{
+      id: string;
+      tournament_id: string;
+      phase: string;
+      group_id: string | null;
+      home_team_id: string;
+      away_team_id: string;
+      court_number: number | null;
+      scheduled_at: string | null;
+      status: string;
+      winner: string | null;
+      walkover_team_id: string | null;
+      current_set: number;
+      created_at: string;
+      updated_at: string;
+    }>("SELECT * FROM matches");
+
+    for (const match of matches) {
+      await enqueueSnapshot(
+        db,
+        `requeue-match-${match.id}`,
+        "match",
+        match.id,
+        "save_match",
+        {
+          id: match.id,
+          tournamentId: match.tournament_id,
+          phase: match.phase,
+          groupId: match.group_id,
+          homeTeamId: match.home_team_id,
+          awayTeamId: match.away_team_id,
+          courtNumber: match.court_number,
+          scheduledAt: match.scheduled_at,
+          status: match.status,
+          winner: match.winner,
+          walkoverTeamId: match.walkover_team_id,
+          currentSet: match.current_set,
+          createdAt: match.created_at,
+          updatedAt: match.updated_at,
+        },
+        now
+      );
+    }
+
+    // 5. Sets. Se sincronizan después de los partidos.
+    const sets = await db.getAllAsync<{
+      match_id: string;
+      set_number: number;
+      home_points: number;
+      away_points: number;
+      closed_at: string | null;
+    }>("SELECT * FROM match_sets");
+
+    for (const set of sets) {
+      await enqueueSnapshot(
+        db,
+        `requeue-set-${set.match_id}-${set.set_number}`,
+        "match_set",
+        set.match_id,
+        "save_set",
+        {
+          matchId: set.match_id,
+          setNumber: set.set_number,
+          homePoints: set.home_points,
+          awayPoints: set.away_points,
+          closedAt: set.closed_at,
+        },
+        now
+      );
+    }
+
+    // 6. Eventos de puntuación. Se conserva el ID real de cada evento.
+    const events = await db.getAllAsync<{
+      id: string;
+      match_id: string;
+      set_number: number;
+      team: string;
+      delta: number;
+      reason: string | null;
+      created_at: string;
+    }>("SELECT * FROM score_events ORDER BY created_at ASC, id ASC");
+
+    for (const event of events) {
+      await enqueueSnapshot(
+        db,
+        `requeue-event-${event.id}`,
+        "score_event",
+        event.id,
+        "record_score_action",
+        {
+          actionId: event.id,
+          matchId: event.match_id,
+          setNumber: event.set_number,
+          team: event.team,
+          delta: event.delta,
+          reason: event.reason,
+          createdAt: event.created_at,
+        },
+        now
+      );
+    }
+
+    // 7. Tiempos muertos
+    const timeouts = await db.getAllAsync<{
+      match_id: string;
+      set_number: number;
+      team: string;
+      used_at: string;
+    }>("SELECT * FROM timeouts");
+
+    for (const timeout of timeouts) {
+      await enqueueSnapshot(
+        db,
+        `requeue-timeout-${timeout.match_id}-${timeout.set_number}-${timeout.team}`,
+        "timeout",
+        timeout.match_id,
+        "use_timeout",
+        {
+          matchId: timeout.match_id,
+          setNumber: timeout.set_number,
+          team: timeout.team,
+          usedAt: timeout.used_at,
+        },
+        now
+      );
+    }
+
+    // 8. Auditoría local
+    const auditRows = await db.getAllAsync<{
+      id: string;
+      entity_type: string;
+      entity_id: string;
+      action: string;
+      details_json: string;
+      created_at: string;
+    }>("SELECT * FROM audit_log ORDER BY created_at ASC, id ASC");
+
+    for (const audit of auditRows) {
+      let details: unknown = {};
+
+      try {
+        details = JSON.parse(audit.details_json);
+      } catch {
+        // Conserva el texto si los datos antiguos no contienen JSON válido.
+        details = { legacyDetails: audit.details_json };
+      }
+
+      await enqueueSnapshot(
+        db,
+        `requeue-audit-${audit.id}`,
+        "audit_log",
+        audit.id,
+        "save_audit_log",
+        {
+          id: audit.id,
+          entityType: audit.entity_type,
+          entityId: audit.entity_id,
+          action: audit.action,
+          details,
+          createdAt: audit.created_at,
+        },
+        now
+      );
+    }
+
+    await db.execAsync("COMMIT;");
+  } catch (error) {
+    try {
+      await db.execAsync("ROLLBACK;");
+    } catch {
+      // Conserva el error original.
+    }
+    throw error;
+  }
+}
+
+async function markOperationSynced(
+  db: SQLiteDatabase,
+  operationId: string
+): Promise<void> {
+  await db.runAsync(
+    `UPDATE sync_queue
+     SET status = 'synced',
+         attempts = attempts + 1,
+         last_error = NULL,
+         updated_at = ?
+     WHERE operation_id = ?`,
+    new Date().toISOString(),
+    operationId
+  );
+}
+
+async function markOperationFailed(
+  db: SQLiteDatabase,
+  operationId: string,
+  errorMessage: string
+): Promise<void> {
+  await db.runAsync(
+    `UPDATE sync_queue
+     SET status = 'error',
+         attempts = attempts + 1,
+         last_error = ?,
+         updated_at = ?
+     WHERE operation_id = ?`,
+    errorMessage,
+    new Date().toISOString(),
+    operationId
+  );
+}
+
+/**
+ * Procesa las operaciones pendientes secuencialmente.
+ *
+ * Las llamadas concurrentes para el mismo objeto SQLiteDatabase no ejecutan
+ * una segunda pasada simultánea.
+ */
+export async function processSyncQueue(
+  db: SQLiteDatabase,
+  provider: RemoteSyncProvider = MockRemoteProvider
+): Promise<SyncResult> {
+  if (databasesBeingProcessed.has(db as object)) {
+    return {
+      processedCount: 0,
+      successCount: 0,
+      failedCount: 0,
+      errors: [],
+    };
+  }
+
+  databasesBeingProcessed.add(db as object);
+
+  const result: SyncResult = {
+    processedCount: 0,
+    successCount: 0,
+    failedCount: 0,
+    errors: [],
+  };
+
+  try {
+    const items = await getPendingSyncOperations(db);
+    result.processedCount = items.length;
+
+    for (const item of items) {
+      try {
+        const response = await provider.pushOperation(item);
+
+        if (response.success) {
+          await markOperationSynced(db, item.operationId);
+          result.successCount++;
+        } else {
+          const errorMessage =
+            response.error ?? "El proveedor rechazó la operación sin explicar el motivo.";
+
+          await markOperationFailed(db, item.operationId, errorMessage);
+          result.failedCount++;
+          result.errors.push({
+            operationId: item.operationId,
+            error: errorMessage,
+          });
+        }
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : "Error desconocido durante la sincronización.";
+
+        await markOperationFailed(db, item.operationId, errorMessage);
+        result.failedCount++;
+        result.errors.push({
+          operationId: item.operationId,
+          error: errorMessage,
+        });
+      }
+    }
+
+    return result;
+  } finally {
+    databasesBeingProcessed.delete(db as object);
+  }
+}
+
+/**
+ * Métricas de la cola para la interfaz.
+ * Los errores agotados (5 intentos) siguen contando como errores.
+ */
+export async function getSyncQueueStats(
+  db: SQLiteDatabase
+): Promise<{
+  pendingCount: number;
+  syncedCount: number;
+  errorCount: number;
+}> {
+  const rows = await db.getAllAsync<{
+    status: string;
+    count: number;
+  }>(
+    `SELECT status, COUNT(*) AS count
+     FROM sync_queue
+     GROUP BY status`
+  );
+
+  const counts = new Map(rows.map((row) => [row.status, row.count]));
+
+  return {
+    pendingCount: counts.get("pending") ?? 0,
+    syncedCount: counts.get("synced") ?? 0,
+    errorCount: counts.get("error") ?? 0,
+  };
+}

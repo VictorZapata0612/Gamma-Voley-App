@@ -95,7 +95,11 @@ export async function assignTeamToGroup(db: SQLiteDatabase, tournamentId: string
   await db.runAsync("INSERT INTO group_memberships (group_id, team_id) VALUES (?, ?)", resolved.id, teamId);
 }
 
-export async function saveScheduledGroupMatches(db: SQLiteDatabase, tournamentId: string, matches: ScheduledGroupMatch[]): Promise<void> {
+export async function saveScheduledGroupMatches(
+  db: SQLiteDatabase,
+  tournamentId: string,
+  matches: ScheduledGroupMatch[]
+): Promise<void> {
   await db.execAsync("BEGIN TRANSACTION;");
   try {
     const now = new Date().toISOString();
@@ -104,7 +108,14 @@ export async function saveScheduledGroupMatches(db: SQLiteDatabase, tournamentId
         `INSERT OR IGNORE INTO matches
           (id, tournament_id, phase, group_id, home_team_id, away_team_id, court_number, status, current_set, created_at, updated_at)
          VALUES (?, ?, 'group', ?, ?, ?, ?, 'scheduled', 1, ?, ?)`,
-        match.id, tournamentId, `group-${match.groupId.toLowerCase()}`, match.homeTeamId, match.awayTeamId, match.courtNumber, now, now
+        match.id,
+        tournamentId,
+        `group-${match.groupId.toLowerCase()}`,
+        match.homeTeamId,
+        match.awayTeamId,
+        match.courtNumber,
+        now,
+        now
       );
       await db.runAsync(
         "INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES (?, 1, 0, 0)",
@@ -114,6 +125,25 @@ export async function saveScheduledGroupMatches(db: SQLiteDatabase, tournamentId
         "INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES (?, 2, 0, 0)",
         match.id
       );
+
+      // Encolar para la sincronización remota
+      await enqueueSyncOperation(
+        db,
+        `sync-match-${match.id}`,
+        "match",
+        match.id,
+        "save_match",
+        {
+          tournamentId,
+          phase: "group",
+          groupId: `group-${match.groupId.toLowerCase()}`,
+          homeTeamId: match.homeTeamId,
+          awayTeamId: match.awayTeamId,
+          courtNumber: match.courtNumber,
+          status: "scheduled",
+          currentSet: 1,
+        }
+      );
     }
 
     await db.execAsync("COMMIT;");
@@ -121,7 +151,6 @@ export async function saveScheduledGroupMatches(db: SQLiteDatabase, tournamentId
     await db.execAsync("ROLLBACK;");
     throw error;
   }
-
 }
 
 export async function getLiveMatch(db: SQLiteDatabase, matchId: string): Promise<LiveMatchRecord | null> {
@@ -323,23 +352,58 @@ export async function listGroupResults(db: SQLiteDatabase, tournamentId: string)
   return results;
 }
 
+
 export async function saveTeam(
   db: SQLiteDatabase,
-  team: Team & { tournamentId: string; registrationStatus?: "pending" | "confirmed" | "withdrawn"; paymentStatus?: "pending" | "paid" }
+  team: Team & {
+    tournamentId: string;
+    registrationStatus?: "pending" | "confirmed" | "withdrawn";
+    paymentStatus?: "pending" | "paid";
+  }
 ): Promise<void> {
   const now = new Date().toISOString();
-  await db.runAsync(
-    `INSERT INTO teams (id, tournament_id, name, registration_status, payment_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at`,
-    team.id,
-    team.tournamentId,
-    team.name,
-    team.registrationStatus ?? "pending",
-    team.paymentStatus ?? "pending",
-    now,
-    now
-  );
+
+  await db.execAsync("BEGIN TRANSACTION;");
+  try {
+    await db.runAsync(
+      `INSERT INTO teams (
+        id, tournament_id, name, registration_status,
+        payment_status, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        registration_status = excluded.registration_status,
+        payment_status = excluded.payment_status,
+        updated_at = excluded.updated_at`,
+      team.id,
+      team.tournamentId,
+      team.name.trim(),
+      team.registrationStatus ?? "pending",
+      team.paymentStatus ?? "pending",
+      now,
+      now
+    );
+
+    await enqueueSyncOperation(
+      db,
+      `sync-team-${team.id}`,
+      "team",
+      team.id,
+      "save_team",
+      {
+        tournamentId: team.tournamentId,
+        name: team.name.trim(),
+        registrationStatus: team.registrationStatus ?? "pending",
+        paymentStatus: team.paymentStatus ?? "pending",
+      }
+    );
+
+    await db.execAsync("COMMIT;");
+  } catch (error) {
+    await db.execAsync("ROLLBACK;");
+    throw error;
+  }
 }
 
 export async function listTeamRecords(db: SQLiteDatabase, tournamentId: string): Promise<TeamRecord[]> {
@@ -369,30 +433,68 @@ export async function getTeamRecord(db: SQLiteDatabase, teamId: string): Promise
   return row ?? null;
 }
 
+
 export async function saveTeamRecord(
   db: SQLiteDatabase,
-  team: Omit<TeamRecord, "groupId"> & { groupId?: "A" | "B" | null }
+  team: Omit<TeamRecord, "groupId"> & {
+    groupId?: "A" | "B" | null;
+  }
 ): Promise<void> {
-  if (!team.name.trim()) throw new Error("El nombre del equipo es obligatorio.");
+  if (!team.name.trim()) {
+    throw new Error("El nombre del equipo es obligatorio.");
+  }
+
   const now = new Date().toISOString();
+
+  await db.execAsync("BEGIN TRANSACTION;");
   try {
     await db.runAsync(
-      `INSERT INTO teams
-        (id, tournament_id, name, captain_name, contact, registration_status, payment_status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET name = excluded.name, captain_name = excluded.captain_name,
-        contact = excluded.contact, registration_status = excluded.registration_status,
-        payment_status = excluded.payment_status, updated_at = excluded.updated_at`,
-      team.id, team.tournamentId, team.name.trim(), team.captainName, team.contact,
-      team.registrationStatus, team.paymentStatus, now, now
+      `INSERT INTO teams (
+        id, tournament_id, name, captain_name, contact,
+        registration_status, payment_status, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        captain_name = excluded.captain_name,
+        contact = excluded.contact,
+        registration_status = excluded.registration_status,
+        payment_status = excluded.payment_status,
+        updated_at = excluded.updated_at`,
+      team.id,
+      team.tournamentId,
+      team.name.trim(),
+      team.captainName,
+      team.contact,
+      team.registrationStatus,
+      team.paymentStatus,
+      now,
+      now
     );
+
+    await enqueueSyncOperation(
+      db,
+      `sync-team-${team.id}-${Date.now()}`,
+      "team",
+      team.id,
+      "save_team",
+      {
+        tournamentId: team.tournamentId,
+        name: team.name.trim(),
+        captainName: team.captainName,
+        contact: team.contact,
+        registrationStatus: team.registrationStatus,
+        paymentStatus: team.paymentStatus,
+      }
+    );
+
+    await db.execAsync("COMMIT;");
   } catch (error) {
-    if (error instanceof Error && error.message.includes("UNIQUE")) {
-      throw new Error("Ya existe un equipo con ese nombre en este torneo.");
-    }
+    await db.execAsync("ROLLBACK;");
     throw error;
   }
 }
+
 
 export async function deleteTeam(db: SQLiteDatabase, teamId: string): Promise<void> {
   const match = await db.getFirstAsync<{ id: string }>(
@@ -438,65 +540,140 @@ export async function savePlayer(
   player: PlayerRecord
 ): Promise<void> {
   if (!player.name.trim()) throw new Error("El nombre del jugador es obligatorio.");
-  const rosterCount = await db.getFirstAsync<{ count: number }>(
-    "SELECT COUNT(*) AS count FROM players WHERE team_id = ? AND id <> ?",
-    player.teamId,
-    player.id
-  );
-  if ((rosterCount?.count ?? 0) >= MAX_ROSTER_SIZE) {
-    throw new Error(`La nómina no puede superar ${MAX_ROSTER_SIZE} jugadores.`);
-  }
-  const activeDuplicate = await db.getFirstAsync<{ id: string }>(
-    "SELECT id FROM players WHERE lower(name) = lower(?) AND id <> ? AND eligibility_status <> 'ineligible'",
-    player.name.trim(), player.id
-  );
-  if (activeDuplicate) {
-    throw new Error("Este jugador ya está registrado en otra plantilla activa y requiere revisión administrativa.");
-  }
+
   const now = new Date().toISOString();
-  await db.runAsync(
-    `INSERT INTO players (id, team_id, name, gender, jersey_number, eligibility_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET team_id = excluded.team_id, name = excluded.name,
-      gender = excluded.gender, jersey_number = excluded.jersey_number,
-      eligibility_status = excluded.eligibility_status, updated_at = excluded.updated_at`,
-    player.id, player.teamId, player.name.trim(), player.gender, player.jerseyNumber,
-    player.eligibility, now, now
-  );
+  await db.execAsync("BEGIN TRANSACTION;");
+  try {
+    await db.runAsync(
+      `INSERT INTO players (id, team_id, name, gender, jersey_number, eligibility_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name,
+         gender = excluded.gender,
+         jersey_number = excluded.jersey_number,
+         eligibility_status = excluded.eligibility_status,
+         updated_at = excluded.updated_at`,
+      player.id,
+      player.teamId,
+      player.name.trim(),
+      player.gender,
+      player.jerseyNumber,
+      player.eligibility,
+      now,
+      now
+    );
+
+    // Encolar para sincronizar con Supabase
+    await enqueueSyncOperation(
+      db,
+      `sync-player-${player.id}`,
+      "player",
+      player.id,
+      "save_player",
+      {
+        teamId: player.teamId,
+        name: player.name.trim(),
+        gender: player.gender,
+        jerseyNumber: player.jerseyNumber,
+        eligibility: player.eligibility,
+      }
+    );
+
+    await db.execAsync("COMMIT;");
+  } catch (error) {
+    await db.execAsync("ROLLBACK;");
+    throw error;
+  }
 }
 
 export async function createMatch(
   db: SQLiteDatabase,
-  match: Match & { tournamentId: string; scheduledAt?: string; courtNumber?: 1 | 2 }
+  match: Match & {
+    tournamentId: string;
+    scheduledAt?: string;
+    courtNumber?: 1 | 2;
+  }
 ): Promise<void> {
   const now = new Date().toISOString();
-  await db.runAsync(
-    `INSERT INTO matches
-      (id, tournament_id, phase, home_team_id, away_team_id, court_number, scheduled_at, status, winner, current_set, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    match.id,
-    match.tournamentId,
-    match.phase,
-    match.homeTeamId,
-    match.awayTeamId,
-    match.courtNumber ?? null,
-    match.scheduledAt ?? null,
-    match.status,
-    match.winner,
-    match.currentSet,
-    now,
-    now
-  );
-  for (const [index, set] of match.sets.entries()) {
+
+  await db.execAsync("BEGIN TRANSACTION;");
+  try {
     await db.runAsync(
-      "INSERT INTO match_sets (match_id, set_number, home_points, away_points) VALUES (?, ?, ?, ?)",
+      `INSERT INTO matches (
+        id, tournament_id, phase, home_team_id, away_team_id,
+        court_number, scheduled_at, status, winner, current_set,
+        created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       match.id,
-      index + 1,
-      set.home,
-      set.away
+      match.tournamentId,
+      match.phase,
+      match.homeTeamId,
+      match.awayTeamId,
+      match.courtNumber ?? null,
+      match.scheduledAt ?? null,
+      match.status,
+      match.winner,
+      match.currentSet,
+      now,
+      now
     );
+
+    await enqueueSyncOperation(
+      db,
+      `sync-match-${match.id}`,
+      "match",
+      match.id,
+      "save_match",
+      {
+        tournamentId: match.tournamentId,
+        phase: match.phase,
+        homeTeamId: match.homeTeamId,
+        awayTeamId: match.awayTeamId,
+        courtNumber: match.courtNumber ?? null,
+        scheduledAt: match.scheduledAt ?? null,
+        status: match.status,
+        winner: match.winner,
+        currentSet: match.currentSet,
+      }
+    );
+
+    for (const [index, set] of match.sets.entries()) {
+      const setNumber = index + 1;
+
+      await db.runAsync(
+        `INSERT INTO match_sets (
+          match_id, set_number, home_points, away_points
+        ) VALUES (?, ?, ?, ?)`,
+        match.id,
+        setNumber,
+        set.home,
+        set.away
+      );
+
+      await enqueueSyncOperation(
+        db,
+        `sync-set-${match.id}-${setNumber}`,
+        "match_set",
+        match.id,
+        "save_set",
+        {
+          matchId: match.id,
+          setNumber,
+          homePoints: set.home,
+          awayPoints: set.away,
+        }
+      );
+    }
+
+    await db.execAsync("COMMIT;");
+  } catch (error) {
+    await db.execAsync("ROLLBACK;");
+    throw error;
   }
 }
+
+
 
 export async function appendScoreAction(
   db: SQLiteDatabase,
@@ -504,11 +681,49 @@ export async function appendScoreAction(
   setNumber: number,
   action: ScoreAction
 ): Promise<void> {
+  if (!Number.isInteger(setNumber) || setNumber < 1) {
+    throw new Error("El número de set no es válido.");
+  }
+
   const now = new Date().toISOString();
+
   await db.execAsync("BEGIN TRANSACTION;");
   try {
+    const existingEvent = await db.getFirstAsync<{ id: string }>(
+      "SELECT id FROM score_events WHERE id = ?",
+      action.id
+    );
+
+    if (existingEvent) {
+      await db.execAsync("COMMIT;");
+      return;
+    }
+
+    const column =
+      action.team === "home" ? "home_points" : "away_points";
+
+    const updateResult = await db.runAsync(
+      `UPDATE match_sets
+       SET ${column} = ${column} + ?
+       WHERE match_id = ?
+         AND set_number = ?
+         AND ${column} + ? >= 0`,
+      action.delta,
+      matchId,
+      setNumber,
+      action.delta
+    );
+
+    if (updateResult.changes !== 1) {
+      throw new Error(
+        "No se pudo actualizar el set: puede no existir o el marcador sería negativo."
+      );
+    }
+
     await db.runAsync(
-      "INSERT INTO score_events (id, match_id, set_number, team, delta, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      `INSERT INTO score_events (
+        id, match_id, set_number, team, delta, reason, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       action.id,
       matchId,
       setNumber,
@@ -517,24 +732,29 @@ export async function appendScoreAction(
       action.reason ?? null,
       now
     );
-    const updateResult = await db.runAsync(
-      `UPDATE match_sets SET ${action.team === "home" ? "home_points" : "away_points"} =
-       ${action.team === "home" ? "home_points" : "away_points"} + ?
-       WHERE match_id = ? AND set_number = ? AND ${action.team === "home" ? "home_points" : "away_points"} + ? >= 0`,
-      action.delta,
+
+    await enqueueSyncOperation(
+      db,
+      `sync-${action.id}`,
+      "match",
       matchId,
-      setNumber,
-      action.delta
+      "record_score_action",
+      {
+        actionId: action.id,
+        setNumber,
+        team: action.team,
+        delta: action.delta,
+        timestamp: now,
+      }
     );
-    if (updateResult.changes !== 1) {
-      throw new Error("No se pudo actualizar el set: puede no existir o el marcador sería negativo.");
-    }
+
     await db.execAsync("COMMIT;");
   } catch (error) {
     await db.execAsync("ROLLBACK;");
     throw error;
   }
 }
+
 
 export async function saveTimeout(
   db: SQLiteDatabase,

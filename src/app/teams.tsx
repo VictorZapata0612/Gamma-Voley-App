@@ -3,8 +3,8 @@ import { useCallback, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
-import { listTeamRecords, type TeamRecord } from "@/database/repositories";
 import { goBack } from "@/utils/navigation";
+import { listTeamRecords, type TeamRecord } from "@/database/repositories";
 
 export default function TeamsScreen() {
   const db = useSQLiteContext();
@@ -20,7 +20,7 @@ export default function TeamsScreen() {
     }
   }, [db]);
 
-  // Reload on focus so returning from a form shows the saved data
+  // Se ejecuta automáticamente cada vez que la pantalla entra en foco / se regresa a ella
   useFocusEffect(
     useCallback(() => {
       void load();
@@ -69,7 +69,7 @@ export default function TeamsScreen() {
         {/* Listado de Equipos */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Equipos Registrados ({teams.length})</Text>
-          <Text style={styles.sectionSubtitle}>Toca un equipo para ver nómina y elegibilidad</Text>
+          <Text style={styles.sectionSubtitle}>Toca un equipo para ver nómina, estado de pago y elegibilidad</Text>
         </View>
 
         {teams.length === 0 && !error ? (

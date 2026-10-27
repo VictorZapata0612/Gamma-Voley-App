@@ -78,6 +78,17 @@ export default function TeamDetailScreen() {
     }, [load])
   );
 
+  // Status changes go through the audited repository update
+  async function togglePaymentStatus() {
+    if (!team) return;
+    await changeTeamStatus({ paymentStatus: team.paymentStatus === "paid" ? "pending" : "paid" });
+  }
+
+  async function toggleRegistrationStatus() {
+    if (!team) return;
+    await changeTeamStatus({ registrationStatus: team.registrationStatus === "confirmed" ? "pending" : "confirmed" });
+  }
+
   async function removeTeam() {
     if (!teamId) return;
     try {
@@ -134,7 +145,7 @@ export default function TeamDetailScreen() {
           </View>
         </View>
 
-        {/* Ficha de Administración e Inscripción */}
+        {/* Ficha de Administración, Pago y Confirmación de Registro */}
         <View style={styles.metaCard}>
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
@@ -149,30 +160,48 @@ export default function TeamDetailScreen() {
 
           <View style={styles.divider} />
 
+          {/* Estado de Pago e Inscripción Interactivo */}
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
-              <Text style={styles.metaLabel}>Inscripción ($150.000)</Text>
+              <Text style={styles.metaLabel}>Cuota Inscripción ($150.000 COP)</Text>
               <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Cambiar estado de pago"
-                onPress={() => void changeTeamStatus({ paymentStatus: team.paymentStatus === "paid" ? "pending" : "paid" })}
-                style={[styles.statusBadge, team.paymentStatus === "paid" ? styles.badgePaid : styles.badgePending]}
+                onPress={() => void togglePaymentStatus()}
+                style={({ pressed }) => [
+                  styles.statusBadge,
+                  team.paymentStatus === "paid" ? styles.badgePaid : styles.badgePending,
+                  pressed && styles.pressed,
+                ]}
               >
                 <Text style={styles.statusBadgeText}>
-                  {team.paymentStatus === "paid" ? "✓ Pagado" : "Pendiente de pago"} · tocar para cambiar
+                  {team.paymentStatus === "paid" ? "✓ Pagado ($150.000)" : "⏳ Pendiente de pago (Toca para marcar pagado)"}
                 </Text>
               </Pressable>
             </View>
+          </View>
+
+          <View style={{ height: 10 }} />
+
+          <View style={styles.metaRow}>
             <View style={styles.metaItem}>
-              <Text style={styles.metaLabel}>Estado Registro</Text>
+              <Text style={styles.metaLabel}>Estado de Confirmación</Text>
               <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Cambiar estado de inscripción"
-                onPress={() => void changeTeamStatus({ registrationStatus: team.registrationStatus === "confirmed" ? "pending" : "confirmed" })}
-                style={[styles.statusBadge, team.registrationStatus === "confirmed" ? styles.badgeConfirmed : styles.badgePending]}
+                onPress={() => void toggleRegistrationStatus()}
+                style={({ pressed }) => [
+                  styles.statusBadge,
+                  team.registrationStatus === "confirmed"
+                    ? styles.badgeConfirmed
+                    : team.registrationStatus === "withdrawn"
+                    ? styles.badgeWithdrawn
+                    : styles.badgePending,
+                  pressed && styles.pressed,
+                ]}
               >
                 <Text style={styles.statusBadgeText}>
-                  {team.registrationStatus === "confirmed" ? "Confirmado" : "Pendiente"} · tocar para cambiar
+                  {team.registrationStatus === "confirmed"
+                    ? "✓ Confirmado en Torneo"
+                    : team.registrationStatus === "withdrawn"
+                    ? "✕ Retirado"
+                    : "⏳ Registro Pendiente (Toca para confirmar)"}
                 </Text>
               </Pressable>
             </View>
@@ -372,14 +401,15 @@ const styles = StyleSheet.create({
 
   statusBadge: {
     alignSelf: "flex-start",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
     marginTop: 4,
   },
-  badgePaid: { backgroundColor: "#162B1F" },
-  badgeConfirmed: { backgroundColor: "#162B1F" },
-  badgePending: { backgroundColor: "#2B2215" },
+  badgePaid: { backgroundColor: "#162B1F", borderWidth: 1, borderColor: "#4CAF50" },
+  badgeConfirmed: { backgroundColor: "#162B1F", borderWidth: 1, borderColor: "#4CAF50" },
+  badgeWithdrawn: { backgroundColor: "#2A181A", borderWidth: 1, borderColor: "#E53935" },
+  badgePending: { backgroundColor: "#2B2215", borderWidth: 1, borderColor: "#FFB300" },
   statusBadgeText: { color: "#FFF", fontSize: 11, fontWeight: "800" },
 
   ruleCard: {
@@ -510,4 +540,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   secondaryText: { color: "#FFF", fontWeight: "800" },
+  pressed: { opacity: 0.72 },
 });

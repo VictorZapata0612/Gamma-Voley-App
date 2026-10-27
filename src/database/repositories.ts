@@ -447,7 +447,8 @@ export async function saveTeamRecord(
         (id, tournament_id, name, captain_name, contact, registration_status, payment_status, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET name = excluded.name, captain_name = excluded.captain_name,
-        contact = excluded.contact, updated_at = excluded.updated_at`,
+        contact = excluded.contact, registration_status = excluded.registration_status,
+        payment_status = excluded.payment_status, updated_at = excluded.updated_at`,
       team.id, team.tournamentId, team.name.trim(), team.captainName, team.contact,
       team.registrationStatus, team.paymentStatus, now, now
     );

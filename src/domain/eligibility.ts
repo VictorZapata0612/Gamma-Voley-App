@@ -1,7 +1,6 @@
 import type { TeamGender } from "./types";
 
 export type PlayerEligibility = "pending_review" | "eligible" | "ineligible";
-export const MAX_ROSTER_SIZE = 12;
 
 export type Player = {
   id: string;

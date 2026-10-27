@@ -5,6 +5,7 @@ import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import { assignTeamToGroup, listGroupTeams, type GroupTeamRecord, saveScheduledGroupMatches } from "@/database/repositories";
 import { createRoundRobinSchedule, validateGroupAssignments } from "@/domain/schedule";
+import { goBack } from "@/utils/navigation";
 
 export default function GroupsScreen() {
   const db = useSQLiteContext();
@@ -117,7 +118,7 @@ export default function GroupsScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => router.back()}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => goBack("/")}>
           <Text style={styles.back}>‹ Inicio</Text>
         </Pressable>
 

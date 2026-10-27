@@ -8,6 +8,7 @@ import { buildSemifinalBracket } from "@/domain/bracket";
 import {
   createKnockoutBracketMatches,
   getTournamentChampion,
+  isGroupPhaseFinished,
   listGroupResults,
   listGroupTeams,
   listKnockoutMatches,
@@ -16,6 +17,7 @@ import {
   type TeamRecord,
 } from "@/database/repositories";
 import type { StandingRow } from "@/domain/types";
+import { goBack } from "@/utils/navigation";
 
 export default function StandingsScreen() {
   const db = useSQLiteContext();
@@ -25,6 +27,7 @@ export default function StandingsScreen() {
   const [champion, setChampion] = useState<TeamRecord | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<"ALL" | "A" | "B">("ALL");
   const [message, setMessage] = useState<string | null>(null);
+  const [groupPhaseFinished, setGroupPhaseFinished] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -32,6 +35,7 @@ export default function StandingsScreen() {
       setResults(await listGroupResults(db, DEFAULT_TOURNAMENT_ID));
       setKnockoutMatches(await listKnockoutMatches(db, DEFAULT_TOURNAMENT_ID));
       setChampion(await getTournamentChampion(db, DEFAULT_TOURNAMENT_ID));
+      setGroupPhaseFinished(await isGroupPhaseFinished(db, DEFAULT_TOURNAMENT_ID));
     } catch {
       // Ignorar error si base no está lista
     }
@@ -212,7 +216,9 @@ export default function StandingsScreen() {
             </Text>
             {matchRecord && (
               <Text style={styles.setsSummaryText}>
-                {matchRecord.sets.map((s) => s.home).join(" - ")}
+                {matchRecord.status === "walkover"
+                  ? matchRecord.winner === "home" ? "Presente" : "W.O."
+                  : matchRecord.sets.map((s) => s.home).join(" - ")}
               </Text>
             )}
           </View>
@@ -231,7 +237,9 @@ export default function StandingsScreen() {
             </Text>
             {matchRecord && (
               <Text style={styles.setsSummaryText}>
-                {matchRecord.sets.map((s) => s.away).join(" - ")}
+                {matchRecord.status === "walkover"
+                  ? matchRecord.winner === "away" ? "Presente" : "W.O."
+                  : matchRecord.sets.map((s) => s.away).join(" - ")}
               </Text>
             )}
           </View>
@@ -254,14 +262,14 @@ export default function StandingsScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => router.back()}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => goBack("/")}>
           <Text style={styles.back}>‹ Inicio</Text>
         </Pressable>
 
         <Text style={styles.eyebrow}>FASE DE GRUPOS · TABLA EN VIVO</Text>
         <Text style={styles.title}>Posiciones Oficiales</Text>
         <Text style={styles.subtitle}>
-          Cálculo automático: Victoria 2 pts · Derrota jugada 1 pt · W.O. 0 pts
+          Ganado 2-0: 3 pts · Ganado 1-1: 2 pts · Perdido 1-1: 1 pt · Perdido 0-2: 0 pts · W.O.: 3 / 0 pts
         </Text>
 
         {/* Banner de Campeón si el torneo ha concluido */}
@@ -321,10 +329,15 @@ export default function StandingsScreen() {
           </View>
 
           {/* Botón para Activar / Generar Semifinales si aún no existen */}
-          {knockoutMatches.length === 0 && bracket && (
+          {knockoutMatches.length === 0 && bracket && groupPhaseFinished && (
             <Pressable onPress={() => void generateBracket()} style={styles.activateBracketBtn}>
               <Text style={styles.activateBracketText}>⚡ Activar y Generar Semifinales</Text>
             </Pressable>
+          )}
+          {knockoutMatches.length === 0 && !groupPhaseFinished && (
+            <Text style={styles.bracketDesc}>
+              Las semifinales se habilitan cuando terminen todos los partidos de grupos.
+            </Text>
           )}
 
           {/* Semifinal 1 */}

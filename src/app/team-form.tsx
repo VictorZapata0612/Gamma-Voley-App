@@ -1,9 +1,10 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import { getTeamRecord, saveTeamRecord } from "@/database/repositories";
+import { goBack } from "@/utils/navigation";
 
 export default function TeamFormScreen() {
   const db = useSQLiteContext();
@@ -40,7 +41,7 @@ export default function TeamFormScreen() {
         registrationStatus,
         paymentStatus,
       });
-      router.replace("/teams");
+      goBack("/teams");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No se pudo guardar el equipo.");
     }
@@ -49,7 +50,7 @@ export default function TeamFormScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver a equipos" onPress={() => router.back()}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Volver a equipos" onPress={() => goBack("/teams")}>
           <Text style={styles.back}>‹ Equipos</Text>
         </Pressable>
 

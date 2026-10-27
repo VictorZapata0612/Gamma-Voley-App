@@ -1,5 +1,5 @@
-import { router, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useLocalSearchParams } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, Vibration, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
 import {
@@ -7,9 +7,19 @@ import {
   recordAdministrativeCorrection,
   recordLiveScoreAction,
   recordMatchTimeout,
+  recordWalkover,
   type LiveMatchRecord,
   type ScoreEventRecord,
 } from "@/database/repositories";
+import { getTimeoutSetNumber, toDisplaySetScore } from "@/domain/rules";
+import { goBack } from "@/utils/navigation";
+
+const STATUS_LABEL: Record<LiveMatchRecord["status"], string> = {
+  scheduled: "PROGRAMADO",
+  in_progress: "EN JUEGO",
+  completed: "FINALIZADO",
+  walkover: "W.O.",
+};
 
 /**
  * Alarma de silbato/chicharra y vibración multitono al finalizar los 30s.
@@ -47,6 +57,11 @@ function triggerTimeoutAlarm() {
   }
 }
 
+// Unique id per action so a retried write can never be applied twice
+function newActionId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export default function LiveScoreScreen() {
   const db = useSQLiteContext();
   const params = useLocalSearchParams<{ matchId?: string | string[] }>();
@@ -57,6 +72,10 @@ export default function LiveScoreScreen() {
   const [correctionMode, setCorrectionMode] = useState(false);
   const [reason, setReason] = useState("");
   const [showHistory, setShowHistory] = useState(false);
+  const [selectedSet, setSelectedSet] = useState(1);
+  const [pendingWalkover, setPendingWalkover] = useState<"home" | "away" | null>(null);
+  // Blocks a second tap while the previous action is still being saved
+  const savingRef = useRef(false);
 
   // Estados del Temporizador de Tiempo Muerto (30 segundos)
   const [timeoutSeconds, setTimeoutSeconds] = useState<number | null>(null);
@@ -97,6 +116,20 @@ export default function LiveScoreScreen() {
     return () => clearInterval(timer);
   }, [timeoutSeconds]);
 
+  async function runAction(action: () => Promise<unknown>, fallbackError: string) {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    try {
+      await action();
+      setError(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : fallbackError);
+    } finally {
+      savingRef.current = false;
+    }
+  }
+
   async function change(team: "home" | "away", delta: 1 | -1) {
     if (!match) return;
     if (delta < 0 && !reason.trim()) {
@@ -104,38 +137,57 @@ export default function LiveScoreScreen() {
       setError("Escribe el motivo de la corrección antes de restar un punto.");
       return;
     }
-    try {
-      const action = {
-        id: `score-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        team,
-        delta,
-        ...(delta < 0 ? { reason } : {}),
-      };
-      if (correctionMode && delta < 0) {
-        await recordAdministrativeCorrection(db, match.id, action);
-      } else {
-        await recordLiveScoreAction(db, match.id, action);
-      }
-      setReason("");
-      setError(null);
-      void load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error al registrar el punto.");
+    const action = {
+      id: newActionId("score"),
+      team,
+      delta,
+      ...(delta < 0 ? { reason: reason.trim() } : {}),
+    };
+    await runAction(async () => {
+      // Every -1 is an audited correction; +1 is an ordinary point
+      if (delta < 0) await recordAdministrativeCorrection(db, match.id, action);
+      else await recordLiveScoreAction(db, match.id, action);
+      if (delta < 0) setReason("");
+    }, "Error al registrar el punto.");
+  }
+
+  async function correctSetScore(team: "home" | "away", delta: 1 | -1) {
+    if (!match) return;
+    if (!reason.trim()) {
+      setError("Debes escribir el motivo obligatorio antes de aplicar la corrección auditada.");
+      return;
     }
+    const action = {
+      id: newActionId("correct"),
+      team,
+      delta,
+      reason: reason.trim(),
+      setNumber: selectedSet,
+    };
+    await runAction(async () => {
+      await recordAdministrativeCorrection(db, match.id, action);
+      setReason("");
+    }, "Error aplicando la corrección en el set.");
+  }
+
+  async function confirmWalkover() {
+    if (!match || !pendingWalkover) return;
+    const absent = pendingWalkover;
+    await runAction(async () => {
+      await recordWalkover(db, match.id, absent);
+      setPendingWalkover(null);
+    }, "No se pudo registrar el W.O.");
   }
 
   async function timeout(team: "home" | "away") {
     if (!match) return;
-    try {
-      await recordMatchTimeout(db, match.id, match.currentSet, team);
-      const teamName = team === "home" ? match.homeName : match.awayName;
+    const teamName = team === "home" ? match.homeName : match.awayName;
+    await runAction(async () => {
+      // The prolongation is part of set 2, so it uses set 2 timeouts
+      await recordMatchTimeout(db, match.id, getTimeoutSetNumber(match.phase, match.currentSet), team);
       setActiveTimeoutTeam(teamName);
       setTimeoutSeconds(30);
-      setError(null);
-      void load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Ese tiempo muerto ya fue utilizado en este set.");
-    }
+    }, "Ese tiempo muerto ya fue utilizado en este set.");
   }
 
   if (!match) {
@@ -143,7 +195,7 @@ export default function LiveScoreScreen() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.center}>
           <Text style={styles.title}>{error ?? "Cargando marcador oficial..."}</Text>
-          <Pressable onPress={() => router.back()} style={styles.buttonSecondary}>
+          <Pressable onPress={() => goBack("/calendar")} style={styles.buttonSecondary}>
             <Text style={styles.buttonSecondaryText}>‹ Volver</Text>
           </Pressable>
         </View>
@@ -151,14 +203,20 @@ export default function LiveScoreScreen() {
     );
   }
 
-  const currentSetData = match.sets[match.currentSet - 1] ?? { home: 0, away: 0 };
+  const currentSetData = toDisplaySetScore(match.phase, match.currentSet, match.sets[match.currentSet - 1] ?? { home: 0, away: 0 });
   const closed = match.status === "completed" || match.status === "walkover";
+  const setLabel = (setNumber: number) =>
+    match.phase === "group" && setNumber === 3 ? "Prolongación" : `Set ${setNumber}`;
+  const displaySet = (setNumber: number) =>
+    toDisplaySetScore(match.phase, setNumber, match.sets[setNumber - 1] ?? { home: 0, away: 0 });
+  const totalHome = match.sets.reduce((sum, set) => sum + set.home, 0);
+  const totalAway = match.sets.reduce((sum, set) => sum + set.away, 0);
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver al panel" onPress={() => router.back()}>
-          <Text style={styles.back}>‹ Panel del Torneo</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Volver al calendario" onPress={() => goBack("/calendar")}>
+          <Text style={styles.back}>‹ Calendario</Text>
         </Pressable>
 
         <View style={styles.headerRow}>
@@ -170,7 +228,7 @@ export default function LiveScoreScreen() {
           </View>
 
           <View style={styles.statusBadge}>
-            <Text style={styles.statusText}>{match.status.toUpperCase()}</Text>
+            <Text style={styles.statusText}>{STATUS_LABEL[match.status]}</Text>
           </View>
         </View>
 
@@ -205,13 +263,19 @@ export default function LiveScoreScreen() {
         <View style={styles.scoreboard}>
           <View style={styles.setBanner}>
             <Text style={styles.setText}>
-              {closed ? "PARTIDO FINALIZADO" : `SET ${match.currentSet} EN JUEGO`}
+              {closed ? "PARTIDO FINALIZADO" : `${setLabel(match.currentSet).toUpperCase()} EN JUEGO`}
             </Text>
             {match.winner ? (
               <Text style={styles.winnerTag}>
                 GANADOR: {match.winner === "home" ? match.homeName : match.awayName}
+                {match.status === "walkover" ? " (W.O.)" : ""}
               </Text>
             ) : null}
+            {match.phase === "group" && (
+              <Text style={styles.globalText}>
+                Acumulado global: {totalHome} - {totalAway}
+              </Text>
+            )}
           </View>
 
           <View style={styles.teamsRow}>
@@ -221,18 +285,22 @@ export default function LiveScoreScreen() {
               <Text style={styles.scoreNumber}>{currentSetData.home}</Text>
 
               {!closed && (
-                <View style={styles.controlsRow}>
+                <View style={styles.controlsColumn}>
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Sumar punto a ${match.homeName}`}
                     onPress={() => void change("home", 1)}
-                    style={({ pressed }) => [styles.scoreBtn, styles.scoreBtnPlus, pressed && styles.pressed]}
+                    style={({ pressed }) => [styles.scoreBtnPlusLarge, styles.scoreBtnPlus, pressed && styles.pressed]}
                   >
                     <Text style={styles.scoreBtnText}>+1</Text>
                   </Pressable>
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Restar punto a ${match.homeName}`}
                     onPress={() => void change("home", -1)}
-                    style={({ pressed }) => [styles.scoreBtn, styles.scoreBtnMinus, pressed && styles.pressed]}
+                    style={({ pressed }) => [styles.scoreBtnMinusSmall, styles.scoreBtnMinus, pressed && styles.pressed]}
                   >
-                    <Text style={styles.scoreBtnMinusText}>-1</Text>
+                    <Text style={styles.scoreBtnMinusText}>−1 (corrección)</Text>
                   </Pressable>
                 </View>
               )}
@@ -246,18 +314,22 @@ export default function LiveScoreScreen() {
               <Text style={styles.scoreNumber}>{currentSetData.away}</Text>
 
               {!closed && (
-                <View style={styles.controlsRow}>
+                <View style={styles.controlsColumn}>
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Sumar punto a ${match.awayName}`}
                     onPress={() => void change("away", 1)}
-                    style={({ pressed }) => [styles.scoreBtn, styles.scoreBtnPlus, pressed && styles.pressed]}
+                    style={({ pressed }) => [styles.scoreBtnPlusLarge, styles.scoreBtnPlus, pressed && styles.pressed]}
                   >
                     <Text style={styles.scoreBtnText}>+1</Text>
                   </Pressable>
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Restar punto a ${match.awayName}`}
                     onPress={() => void change("away", -1)}
-                    style={({ pressed }) => [styles.scoreBtn, styles.scoreBtnMinus, pressed && styles.pressed]}
+                    style={({ pressed }) => [styles.scoreBtnMinusSmall, styles.scoreBtnMinus, pressed && styles.pressed]}
                   >
-                    <Text style={styles.scoreBtnMinusText}>-1</Text>
+                    <Text style={styles.scoreBtnMinusText}>−1 (corrección)</Text>
                   </Pressable>
                 </View>
               )}
@@ -277,20 +349,54 @@ export default function LiveScoreScreen() {
                   idx + 1 === match.currentSet && styles.setCardActive,
                 ]}
               >
-                <Text style={styles.setCardNum}>Set {idx + 1}</Text>
+                <Text style={styles.setCardNum}>{setLabel(idx + 1)}</Text>
                 <Text style={styles.setCardScore}>
-                  {s.home} - {s.away}
+                  {toDisplaySetScore(match.phase, idx + 1, s).home} - {toDisplaySetScore(match.phase, idx + 1, s).away}
                 </Text>
               </View>
             ))}
           </View>
         </View>
 
+        {/* W.O.: only for matches that have not started */}
+        {match.status === "scheduled" && (
+          <View style={styles.correctionBox}>
+            <Text style={styles.correctionTitle}>W.O. · equipo que no se presentó</Text>
+            <Text style={styles.timeoutHint}>
+              {match.phase === "group"
+                ? "Se registra 15-0 y 15-0 a favor del equipo presente."
+                : "El equipo presente avanza sin marcador (en la final, queda campeón)."}
+            </Text>
+            <View style={styles.rowButtons}>
+              {pendingWalkover ? (
+                <>
+                  <Pressable accessibilityRole="button" onPress={() => void confirmWalkover()} style={[styles.actionBtn, styles.scoreBtnPlus]}>
+                    <Text style={styles.actionBtnText}>
+                      Confirmar W.O. de {pendingWalkover === "home" ? match.homeName : match.awayName}
+                    </Text>
+                  </Pressable>
+                  <Pressable accessibilityRole="button" onPress={() => setPendingWalkover(null)} style={[styles.actionBtn, styles.scoreBtnMinus]}>
+                    <Text style={styles.actionBtnText}>Cancelar</Text>
+                  </Pressable>
+                </>
+              ) : (
+                (["home", "away"] as const).map((team) => (
+                  <Pressable key={team} accessibilityRole="button" onPress={() => setPendingWalkover(team)} style={[styles.actionBtn, styles.scoreBtnMinus]}>
+                    <Text style={styles.actionBtnText} numberOfLines={1}>
+                      No llegó {team === "home" ? match.homeName : match.awayName}
+                    </Text>
+                  </Pressable>
+                ))
+              )}
+            </View>
+          </View>
+        )}
+
         {/* Tiempos Muertos del Set Activo */}
         {!closed && (
           <View style={styles.timeoutRow}>
             <View style={styles.timeoutHeader}>
-              <Text style={styles.sectionTitle}>Tiempos Muertos (Set {match.currentSet})</Text>
+              <Text style={styles.sectionTitle}>Tiempos Muertos (Set {getTimeoutSetNumber(match.phase, match.currentSet)})</Text>
               <Text style={styles.timeoutHint}>1 de 30s por equipo y set</Text>
             </View>
 
@@ -333,7 +439,21 @@ export default function LiveScoreScreen() {
         )}
 
         {/* Modo de Corrección Administrativa */}
-        {correctionMode && !closed && (
+        {match.status !== "walkover" && (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              setCorrectionMode(!correctionMode);
+              setSelectedSet(match.currentSet);
+            }}
+            style={({ pressed }) => [styles.historyToggle, pressed && styles.pressed]}
+          >
+            <Text style={styles.historyToggleText}>
+              {correctionMode ? "▼ Cerrar corrección administrativa" : "▶ Corrección administrativa auditada"}
+            </Text>
+          </Pressable>
+        )}
+        {correctionMode && match.status !== "walkover" && (
           <View style={styles.correctionBox}>
             <Text style={styles.correctionTitle}>Motivo de Corrección Administrativa</Text>
             <TextInput
@@ -343,6 +463,38 @@ export default function LiveScoreScreen() {
               value={reason}
               onChangeText={setReason}
             />
+            <Text style={styles.timeoutHint}>Set a corregir:</Text>
+            <View style={styles.rowButtons}>
+              {match.sets.map((_, index) => (
+                <Pressable
+                  key={index + 1}
+                  onPress={() => setSelectedSet(index + 1)}
+                  style={[styles.setPill, selectedSet === index + 1 && styles.setPillActive]}
+                >
+                  <Text style={styles.actionBtnText}>
+                    {setLabel(index + 1)} ({displaySet(index + 1).home}-{displaySet(index + 1).away})
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            {(["home", "away"] as const).map((team) => (
+              <View key={team} style={styles.correctionTeamRow}>
+                <Text style={styles.correctionTeamName} numberOfLines={1}>
+                  {team === "home" ? match.homeName : match.awayName}: {displaySet(selectedSet)[team]}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={(match.sets[selectedSet - 1]?.[team] ?? 0) === 0}
+                  onPress={() => void correctSetScore(team, -1)}
+                  style={[styles.correctionBtn, styles.scoreBtnMinus]}
+                >
+                  <Text style={styles.actionBtnText}>−1</Text>
+                </Pressable>
+                <Pressable accessibilityRole="button" onPress={() => void correctSetScore(team, 1)} style={[styles.correctionBtn, styles.scoreBtnPlus]}>
+                  <Text style={styles.actionBtnText}>+1</Text>
+                </Pressable>
+              </View>
+            ))}
           </View>
         )}
 
@@ -369,7 +521,7 @@ export default function LiveScoreScreen() {
                     {evt.team === "home" ? match.homeName : match.awayName} ({evt.delta > 0 ? "+1" : "-1"})
                   </Text>
                   <Text style={styles.historyTime}>
-                    Set {evt.setNumber} · {new Date(evt.createdAt).toLocaleTimeString()}
+                    {setLabel(evt.setNumber)} · {new Date(evt.createdAt).toLocaleTimeString("es-CO", { hour12: false })}
                   </Text>
                   {evt.reason && <Text style={styles.historyReason}>Motivo: {evt.reason}</Text>}
                 </View>
@@ -444,6 +596,18 @@ const styles = StyleSheet.create({
   scoreNumber: { color: "#FFF", fontSize: 56, fontWeight: "900", marginVertical: 4, fontVariant: ["tabular-nums"] },
 
   controlsRow: { flexDirection: "row", gap: 8, marginTop: 6 },
+  controlsColumn: { alignSelf: "stretch", marginTop: 6, paddingHorizontal: 6 },
+  scoreBtnPlusLarge: { height: 88, borderRadius: 18, alignItems: "center", justifyContent: "center" },
+  scoreBtnMinusSmall: { height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", marginTop: 24 },
+  globalText: { color: "#A6A8AE", fontSize: 12, fontWeight: "700", marginTop: 4 },
+  rowButtons: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
+  actionBtn: { flex: 1, minHeight: 48, borderRadius: 12, alignItems: "center", justifyContent: "center", paddingHorizontal: 10 },
+  actionBtnText: { color: "#FFF", fontSize: 13, fontWeight: "800", textAlign: "center" },
+  setPill: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: "#2B2D35" },
+  setPillActive: { backgroundColor: "#E53935" },
+  correctionTeamRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 },
+  correctionTeamName: { flex: 1, color: "#FFF", fontSize: 14, fontWeight: "800" },
+  correctionBtn: { width: 56, height: 44, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   scoreBtn: { paddingVertical: 12, paddingHorizontal: 18, borderRadius: 10, alignItems: "center" },
   scoreBtnPlus: { backgroundColor: "#E53935" },
   scoreBtnMinus: { backgroundColor: "#2B2D35" },

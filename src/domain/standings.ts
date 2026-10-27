@@ -1,11 +1,13 @@
 import type { MatchResult, StandingRow, Team } from "./types";
 
-function getGroupPoints(result: MatchResult, winner: "home" | "away"): number {
-  if (result.status === "walkover") return 3;
-  const homeSets = result.sets.filter((set) => set.home > set.away).length;
-  const awaySets = result.sets.filter((set) => set.away > set.home).length;
+// Official points: won 2-0 = 3, won 1-1 = 2, lost 1-1 = 1, lost 0-2 = 0.
+// Only sets 1 and 2 count as sets; the prolongation decides the winner but is not a set.
+function getGroupPoints(result: MatchResult, winner: "home" | "away"): { winner: number; loser: number } {
+  const regularSets = result.sets.slice(0, 2);
+  const homeSets = regularSets.filter((set) => set.home > set.away).length;
+  const awaySets = regularSets.filter((set) => set.away > set.home).length;
   const winnerSets = winner === "home" ? homeSets : awaySets;
-  return winnerSets === 2 ? 3 : 2;
+  return winnerSets === 2 ? { winner: 3, loser: 0 } : { winner: 2, loser: 1 };
 }
 
 export function calculateStandings(teams: Team[], results: MatchResult[]): StandingRow[] {
@@ -47,13 +49,15 @@ export function calculateStandings(teams: Team[], results: MatchResult[]): Stand
     } else if (result.winner === "home") {
       home.wins += 1;
       away.losses += 1;
-      home.classificationPoints += getGroupPoints(result, "home");
-      away.classificationPoints += 1;
+      const points = getGroupPoints(result, "home");
+      home.classificationPoints += points.winner;
+      away.classificationPoints += points.loser;
     } else if (result.winner === "away") {
       away.wins += 1;
       home.losses += 1;
-      away.classificationPoints += getGroupPoints(result, "away");
-      home.classificationPoints += 1;
+      const points = getGroupPoints(result, "away");
+      away.classificationPoints += points.winner;
+      home.classificationPoints += points.loser;
     } else {
       throw new Error(`Resultado ${result.matchId} no tiene un ganador válido.`);
     }

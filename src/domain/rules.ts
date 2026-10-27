@@ -16,6 +16,10 @@ export const KNOCKOUT_RULES: MatchRules = {
   groupSecondSetTieBreakTarget: 21,
 };
 
+export const GROUP_SET_TARGET = 15;
+export const PROLONGATION_BASE = 15;
+export const GROUP_PROLONGATION_TARGET = 21;
+
 export function getMatchRules(phase: "group" | "knockout"): MatchRules {
   return phase === "group" ? GROUP_RULES : KNOCKOUT_RULES;
 }
@@ -24,7 +28,7 @@ export function isSetClosed(
   phase: "group" | "knockout",
   set: SetScore,
   setNumber: number,
-  previousSets: SetScore[] = []
+  _previousSets: SetScore[] = []
 ): boolean {
   const high = Math.max(set.home, set.away);
   const low = Math.min(set.home, set.away);
@@ -33,43 +37,39 @@ export function isSetClosed(
     return high >= 21 && high - low >= 2;
   }
 
-  // En fase de grupos, el set 1 cierra al alcanzar los 15 puntos base
-  if (setNumber === 1) {
-    return high >= 15;
+  // Group phase: sets 1 and 2 close when a team reaches 15 base points
+  if (setNumber <= 2) {
+    return high >= GROUP_SET_TARGET;
   }
 
-  // En el set 2 de grupos, debe alcanzarse al menos la base de 15 puntos
-  if (high < 15) return false;
+  // Group phase set 3 is the prolongation: stored from 0-0, displayed from 15-15.
+  // It closes with a 2-point lead or when a team reaches 21 (20-20 -> 21).
+  return high - low >= 2 || high >= GROUP_PROLONGATION_TARGET - PROLONGATION_BASE;
+}
 
-  const accumulatedHome = previousSets.reduce((sum, item) => sum + item.home, 0) + set.home;
-  const accumulatedAway = previousSets.reduce((sum, item) => sum + item.away, 0) + set.away;
-  const globalDiff = Math.abs(accumulatedHome - accumulatedAway);
+function totals(sets: SetScore[]): SetScore {
+  return sets.reduce((sum, set) => ({ home: sum.home + set.home, away: sum.away + set.away }), { home: 0, away: 0 });
+}
 
-  // 1. Un set de grupos NUNCA puede cerrarse si el acumulado global permanece empatado
-  if (globalDiff === 0) return false;
+function allSetsClosed(phase: "group" | "knockout", sets: SetScore[]): boolean {
+  return sets.every((set, index) => isSetClosed(phase, set, index + 1, sets.slice(0, index)));
+}
 
-  // 2. Límite máximo de 21 puntos en el set 2:
-  if (high >= 21) return true;
+// A group match goes to prolongation when both sets are closed and the global score is tied
+export function needsProlongation(sets: SetScore[]): boolean {
+  if (sets.length !== 2 || !allSetsClosed("group", sets)) return false;
+  const total = totals(sets);
+  return total.home === total.away;
+}
 
-  // 3. Regla especial tras empate 20-20 en el acumulado global:
-  // Si el partido viene de un 20-20 global, el primero en alcanzar los 21 puntos acumulados gana.
-  if ((accumulatedHome === 21 && accumulatedAway === 20) || (accumulatedHome === 20 && accumulatedAway === 21)) {
-    return true;
-  }
+// The prolongation is part of set 2, so it shares set 2 timeouts
+export function getTimeoutSetNumber(phase: "group" | "knockout", setNumber: number): number {
+  return phase === "group" && setNumber === 3 ? 2 : setNumber;
+}
 
-  // 4. Zona de alargue propia del set (ambos equipos en >= 14 en el set 2):
-  // Cierra cuando un equipo logra ventaja de 2 puntos en el set (ej. 14-16, 15-17).
-  if (low >= 14) {
-    return high - low >= 2;
-  }
-
-  // 5. Prolongación global por acumulado (para cualquier otro caso):
-  // Exige al menos +2 de ventaja en el marcador global acumulado (ej. 18-16, 27-25).
-  if (globalDiff < 2) {
-    return false;
-  }
-
-  return true;
+export function toDisplaySetScore(phase: "group" | "knockout", setNumber: number, set: SetScore): SetScore {
+  if (phase !== "group" || setNumber !== 3) return set;
+  return { home: set.home + PROLONGATION_BASE, away: set.away + PROLONGATION_BASE };
 }
 
 export function getSetWinner(set: SetScore): "home" | "away" | null {
@@ -78,11 +78,11 @@ export function getSetWinner(set: SetScore): "home" | "away" | null {
 }
 
 export function getGroupMatchWinner(sets: SetScore[]): "home" | "away" | null {
-  if (sets.length !== 2 || sets.some((set) => getSetWinner(set) === null)) return null;
-  const homeTotal = sets.reduce((sum, set) => sum + set.home, 0);
-  const awayTotal = sets.reduce((sum, set) => sum + set.away, 0);
-  if (homeTotal === awayTotal) return null;
-  return homeTotal > awayTotal ? "home" : "away";
+  if (sets.length < 2 || sets.length > 3 || !allSetsClosed("group", sets)) return null;
+  if (sets.length === 3 && !needsProlongation(sets.slice(0, 2))) return null;
+  const total = totals(sets);
+  if (total.home === total.away) return null;
+  return total.home > total.away ? "home" : "away";
 }
 
 export function getKnockoutMatchWinner(sets: SetScore[]): "home" | "away" | null {
@@ -94,7 +94,5 @@ export function getKnockoutMatchWinner(sets: SetScore[]): "home" | "away" | null
 }
 
 export function isMatchComplete(phase: "group" | "knockout", sets: SetScore[]): boolean {
-  return phase === "group"
-    ? sets.length === 2 && sets.every((set, index) => isSetClosed(phase, set, index + 1, sets.slice(0, index)))
-    : getKnockoutMatchWinner(sets) !== null;
+  return phase === "group" ? getGroupMatchWinner(sets) !== null : getKnockoutMatchWinner(sets) !== null;
 }

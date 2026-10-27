@@ -3,7 +3,7 @@ import type { GroupId, Match, MatchResult, ScoreAction, SemifinalBracket, SetSco
 import { MAX_ROSTER_SIZE } from "@/domain/eligibility";
 import type { ScheduledGroupMatch } from "@/domain/schedule";
 import { canCloseSet, isOfficialMatchComplete } from "@/domain/liveScoring";
-import { getGroupMatchWinner, getKnockoutMatchWinner } from "@/domain/rules";
+import { getGroupMatchWinner, getKnockoutMatchWinner, getTimeoutSetNumber, needsProlongation } from "@/domain/rules";
 
 type TeamRow = {
   id: string;
@@ -141,7 +141,7 @@ export async function getLiveMatch(db: SQLiteDatabase, matchId: string): Promise
   const timeoutRows = await db.getAllAsync<{ team: "home" | "away" }>(
     "SELECT team FROM timeouts WHERE match_id = ? AND set_number = ?",
     matchId,
-    match.currentSet
+    getTimeoutSetNumber(match.phase, match.currentSet)
   );
   const timeouts: TimeoutState = {
     homeUsed: timeoutRows.some((r) => r.team === "home"),
@@ -180,19 +180,21 @@ export async function getLiveMatch(db: SQLiteDatabase, matchId: string): Promise
 }
 
 export async function recordLiveScoreAction(db: SQLiteDatabase, matchId: string, action: ScoreAction): Promise<LiveMatchRecord> {
-  const match = await getLiveMatch(db, matchId);
-  if (!match) throw new Error("El partido no existe.");
-  if (match.status === "completed" || match.status === "walkover") throw new Error("El partido ya está cerrado; requiere una corrección administrativa.");
-  const setNumber = match.currentSet;
-  const current = match.sets[setNumber - 1];
-  if (!current) throw new Error("El set actual no está inicializado.");
-  const next = { ...current, [action.team]: current[action.team] + action.delta };
-  if (next.home < 0 || next.away < 0) throw new Error("El marcador no puede ser negativo.");
+  // Read inside the transaction so the score is never computed from a stale snapshot
   await db.execAsync("BEGIN TRANSACTION;");
   try {
+    const match = await getLiveMatch(db, matchId);
+    if (!match) throw new Error("El partido no existe.");
+    if (match.status === "completed" || match.status === "walkover") throw new Error("El partido ya está cerrado; requiere una corrección administrativa.");
+    const setNumber = match.currentSet;
+    const current = match.sets[setNumber - 1];
+    if (!current) throw new Error("El set actual no está inicializado.");
+    const next = { ...current, [action.team]: current[action.team] + action.delta };
+    if (next.home < 0 || next.away < 0) throw new Error("El marcador no puede ser negativo.");
     const now = new Date().toISOString();
     await db.runAsync("INSERT INTO score_events (id, match_id, set_number, team, delta, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", action.id, matchId, setNumber, action.team, action.delta, action.reason ?? null, now);
-    await db.runAsync(`UPDATE match_sets SET ${action.team === "home" ? "home_points" : "away_points"} = ? WHERE match_id = ? AND set_number = ?`, next[action.team], matchId, setNumber);
+    const column = action.team === "home" ? "home_points" : "away_points";
+    await db.runAsync(`UPDATE match_sets SET ${column} = ${column} + ? WHERE match_id = ? AND set_number = ?`, action.delta, matchId, setNumber);
     await db.runAsync("UPDATE matches SET status = 'in_progress', updated_at = ? WHERE id = ? AND status = 'scheduled'", now, matchId);
     const updatedSets = match.sets.map((set, index) => index === setNumber - 1 ? next : set);
     if (canCloseSet(match.phase, setNumber, next, updatedSets.slice(0, setNumber - 1))) {
@@ -201,11 +203,11 @@ export async function recordLiveScoreAction(db: SQLiteDatabase, matchId: string,
         const winner = match.phase === "group" ? getGroupMatchWinner(updatedSets) : getKnockoutMatchWinner(updatedSets);
         await db.runAsync("UPDATE matches SET status = 'completed', winner = ?, updated_at = ? WHERE id = ?", winner, now, matchId);
       } else if (match.phase === "group") {
-        if (setNumber === 1) {
-          await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES (?, 2, 0, 0)", matchId);
-          await db.runAsync("UPDATE matches SET current_set = 2, updated_at = ? WHERE id = ?", now, matchId);
+        // Set 1 opens set 2; a tied global after set 2 opens the prolongation (set 3, shown from 15-15)
+        if (setNumber === 1 || (setNumber === 2 && needsProlongation(updatedSets))) {
+          await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES (?, ?, 0, 0)", matchId, setNumber + 1);
+          await db.runAsync("UPDATE matches SET current_set = ?, updated_at = ? WHERE id = ?", setNumber + 1, now, matchId);
         }
-        // En fase de grupos nunca se crea un tercer set; si no ha finalizado, el set 2 continúa en prolongación
       } else {
         const newSetNumber = setNumber + 1;
         if (newSetNumber <= 3) {

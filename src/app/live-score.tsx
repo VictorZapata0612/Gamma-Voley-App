@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
 import {
@@ -10,6 +10,7 @@ import {
   type LiveMatchRecord,
   type ScoreEventRecord,
 } from "@/database/repositories";
+import { getTimeoutSetNumber, toDisplaySetScore } from "@/domain/rules";
 
 export default function LiveScoreScreen() {
   const db = useSQLiteContext();
@@ -22,6 +23,8 @@ export default function LiveScoreScreen() {
   const [selectedSet, setSelectedSet] = useState<number>(1);
   const [reason, setReason] = useState("");
   const [showHistory, setShowHistory] = useState(false);
+  // Blocks a second tap while the previous action is still being saved
+  const savingRef = useRef(false);
 
   const load = useCallback(async () => {
     if (!matchId) {
@@ -45,12 +48,13 @@ export default function LiveScoreScreen() {
   }, [load]);
 
   async function change(team: "home" | "away", delta: 1 | -1) {
-    if (!match) return;
+    if (!match || savingRef.current) return;
     if (delta < 0 && !reason.trim()) {
       setCorrectionMode(true);
       setError("Escribe el motivo de la corrección antes de restar un punto.");
       return;
     }
+    savingRef.current = true;
     try {
       const action = {
         id: `score-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -69,15 +73,18 @@ export default function LiveScoreScreen() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo guardar la acción.");
+    } finally {
+      savingRef.current = false;
     }
   }
 
   async function correctSetScore(team: "home" | "away", delta: 1 | -1) {
-    if (!match) return;
+    if (!match || savingRef.current) return;
     if (!reason.trim()) {
       setError("Debes escribir el motivo obligatorio antes de aplicar la corrección auditada.");
       return;
     }
+    savingRef.current = true;
     try {
       const action = {
         id: `correct-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -92,13 +99,15 @@ export default function LiveScoreScreen() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error aplicando la corrección en el set.");
+    } finally {
+      savingRef.current = false;
     }
   }
 
   async function timeout(team: "home" | "away") {
     if (!match) return;
     try {
-      await recordMatchTimeout(db, match.id, match.currentSet, team);
+      await recordMatchTimeout(db, match.id, getTimeoutSetNumber(match.phase, match.currentSet), team);
       await load();
       setError(null);
     } catch (err) {
@@ -114,7 +123,7 @@ export default function LiveScoreScreen() {
     );
   }
 
-  const current = match.sets[match.currentSet - 1] ?? { home: 0, away: 0 };
+  const current = toDisplaySetScore(match.phase, match.currentSet, match.sets[match.currentSet - 1] ?? { home: 0, away: 0 });
   const targetSetScore = match.sets[selectedSet - 1] ?? { home: 0, away: 0 };
   const closed = match.status === "completed" || match.status === "walkover";
 
@@ -127,11 +136,12 @@ export default function LiveScoreScreen() {
 
   const isProlonged =
     match.phase === "group"
-      ? match.currentSet === 2 &&
-        (Math.max(current.home, current.away) > 15 ||
-          (Math.max(current.home, current.away) === 15 && totalHome === totalAway))
+      ? match.currentSet === 3
       : Math.max(current.home, current.away) > 21 ||
         (Math.max(current.home, current.away) === 21 && Math.abs(current.home - current.away) < 2);
+
+  const setLabel = (setNumber: number) =>
+    match.phase === "group" && setNumber === 3 ? "Prolongación" : `Set ${setNumber}`;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -231,7 +241,7 @@ export default function LiveScoreScreen() {
         <View style={styles.card}>
           <View style={styles.setCardHeader}>
             <Text style={styles.setLabel}>
-              SET {match.currentSet} ·{" "}
+              {setLabel(match.currentSet).toUpperCase()} ·{" "}
               {match.phase === "group" ? "FASE DE GRUPOS (BASE 15)" : "ELIMINACIÓN DIRECTA (BASE 21)"}
             </Text>
             {isProlonged && (
@@ -270,11 +280,11 @@ export default function LiveScoreScreen() {
             return (
               <View style={styles.setRow} key={index}>
                 <View style={styles.setCol}>
-                  <Text style={styles.setText}>Set {index + 1}</Text>
+                  <Text style={styles.setText}>{setLabel(index + 1)}</Text>
                   {isCurrent && <Text style={styles.activeSetBadge}>En juego</Text>}
                 </View>
                 <Text style={styles.setScore}>
-                  {set.home} - {set.away}
+                  {toDisplaySetScore(match.phase, index + 1, set).home} - {toDisplaySetScore(match.phase, index + 1, set).away}
                 </Text>
               </View>
             );
@@ -284,7 +294,7 @@ export default function LiveScoreScreen() {
         {/* Tiempos Muertos del Set Activo */}
         <View style={styles.timeoutRow}>
           <View style={styles.timeoutHeader}>
-            <Text style={styles.section}>Tiempos muertos · Set {match.currentSet}</Text>
+            <Text style={styles.section}>Tiempos muertos · Set {getTimeoutSetNumber(match.phase, match.currentSet)}</Text>
             <Text style={styles.timeoutHint}>1 de 30 s por equipo y set</Text>
           </View>
 
@@ -380,7 +390,7 @@ export default function LiveScoreScreen() {
                     style={[styles.setPickerPill, isSelected && styles.setPickerPillSelected]}
                   >
                     <Text style={[styles.setPickerPillText, isSelected && styles.setPickerPillTextSelected]}>
-                      Set {setNum} ({match.sets[index].home}-{match.sets[index].away})
+                      {setLabel(setNum)} ({toDisplaySetScore(match.phase, setNum, match.sets[index]).home}-{toDisplaySetScore(match.phase, setNum, match.sets[index]).away})
                     </Text>
                   </Pressable>
                 );

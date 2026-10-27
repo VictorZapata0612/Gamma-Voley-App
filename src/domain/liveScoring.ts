@@ -1,4 +1,4 @@
-import { getGroupMatchWinner, getKnockoutMatchWinner, isSetClosed } from "./rules";
+import { getGroupMatchWinner, getKnockoutMatchWinner, isMatchComplete, isSetClosed } from "./rules";
 import type { SetScore, TournamentPhase } from "./types";
 
 export function nextSetNumber(phase: TournamentPhase, sets: SetScore[]): number {
@@ -17,5 +17,5 @@ export function canCloseSet(
 }
 
 export function isOfficialMatchComplete(phase: TournamentPhase, sets: SetScore[]): boolean {
-  return phase === "group" ? sets.length === 2 && getGroupMatchWinner(sets) !== null : getKnockoutMatchWinner(sets) !== null;
+  return isMatchComplete(phase, sets);
 }

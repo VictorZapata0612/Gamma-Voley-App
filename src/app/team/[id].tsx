@@ -2,7 +2,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
-import { deleteTeam, getTeamRecord, listPlayers, type PlayerRecord, type TeamRecord } from "@/database/repositories";
+import { deleteTeam, getTeamRecord, listPlayers, saveTeamRecord, type PlayerRecord, type TeamRecord } from "@/database/repositories";
 
 export default function TeamDetailScreen() {
   const db = useSQLiteContext();
@@ -38,9 +38,40 @@ export default function TeamDetailScreen() {
   }, [db, teamId]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
+    const timeoutId = setTimeout(() => {
+      void load();
+    }, 0);
+
+    return () => clearTimeout(timeoutId);
   }, [load]);
+
+  async function togglePaymentStatus() {
+    if (!team) return;
+    const newStatus = team.paymentStatus === "paid" ? "pending" : "paid";
+    try {
+      await saveTeamRecord(db, {
+        ...team,
+        paymentStatus: newStatus,
+      });
+      void load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo actualizar el estado de pago.");
+    }
+  }
+
+  async function toggleRegistrationStatus() {
+    if (!team) return;
+    const newStatus = team.registrationStatus === "confirmed" ? "pending" : "confirmed";
+    try {
+      await saveTeamRecord(db, {
+        ...team,
+        registrationStatus: newStatus,
+      });
+      void load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo actualizar el estado de registro.");
+    }
+  }
 
   async function removeTeam() {
     if (!teamId) return;
@@ -98,7 +129,7 @@ export default function TeamDetailScreen() {
           </View>
         </View>
 
-        {/* Ficha de Administración e Inscripción */}
+        {/* Ficha de Administración, Pago y Confirmación de Registro */}
         <View style={styles.metaCard}>
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
@@ -113,22 +144,50 @@ export default function TeamDetailScreen() {
 
           <View style={styles.divider} />
 
+          {/* Estado de Pago e Inscripción Interactivo */}
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
-              <Text style={styles.metaLabel}>Inscripción ($150.000)</Text>
-              <View style={[styles.statusBadge, team.paymentStatus === "paid" ? styles.badgePaid : styles.badgePending]}>
+              <Text style={styles.metaLabel}>Cuota Inscripción ($150.000 COP)</Text>
+              <Pressable
+                onPress={() => void togglePaymentStatus()}
+                style={({ pressed }) => [
+                  styles.statusBadge,
+                  team.paymentStatus === "paid" ? styles.badgePaid : styles.badgePending,
+                  pressed && styles.pressed,
+                ]}
+              >
                 <Text style={styles.statusBadgeText}>
-                  {team.paymentStatus === "paid" ? "✓ Pagado" : "Pendiente de pago"}
+                  {team.paymentStatus === "paid" ? "✓ Pagado ($150.000)" : "⏳ Pendiente de pago (Toca para marcar pagado)"}
                 </Text>
-              </View>
+              </Pressable>
             </View>
+          </View>
+
+          <View style={{ height: 10 }} />
+
+          <View style={styles.metaRow}>
             <View style={styles.metaItem}>
-              <Text style={styles.metaLabel}>Estado Registro</Text>
-              <View style={[styles.statusBadge, team.registrationStatus === "confirmed" ? styles.badgeConfirmed : styles.badgePending]}>
+              <Text style={styles.metaLabel}>Estado de Confirmación</Text>
+              <Pressable
+                onPress={() => void toggleRegistrationStatus()}
+                style={({ pressed }) => [
+                  styles.statusBadge,
+                  team.registrationStatus === "confirmed"
+                    ? styles.badgeConfirmed
+                    : team.registrationStatus === "withdrawn"
+                    ? styles.badgeWithdrawn
+                    : styles.badgePending,
+                  pressed && styles.pressed,
+                ]}
+              >
                 <Text style={styles.statusBadgeText}>
-                  {team.registrationStatus === "confirmed" ? "Confirmado" : "Pendiente"}
+                  {team.registrationStatus === "confirmed"
+                    ? "✓ Confirmado en Torneo"
+                    : team.registrationStatus === "withdrawn"
+                    ? "✕ Retirado"
+                    : "⏳ Registro Pendiente (Toca para confirmar)"}
                 </Text>
-              </View>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -315,14 +374,15 @@ const styles = StyleSheet.create({
 
   statusBadge: {
     alignSelf: "flex-start",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
     marginTop: 4,
   },
-  badgePaid: { backgroundColor: "#162B1F" },
-  badgeConfirmed: { backgroundColor: "#162B1F" },
-  badgePending: { backgroundColor: "#2B2215" },
+  badgePaid: { backgroundColor: "#162B1F", borderWidth: 1, borderColor: "#4CAF50" },
+  badgeConfirmed: { backgroundColor: "#162B1F", borderWidth: 1, borderColor: "#4CAF50" },
+  badgeWithdrawn: { backgroundColor: "#2A181A", borderWidth: 1, borderColor: "#E53935" },
+  badgePending: { backgroundColor: "#2B2215", borderWidth: 1, borderColor: "#FFB300" },
   statusBadgeText: { color: "#FFF", fontSize: 11, fontWeight: "800" },
 
   ruleCard: {
@@ -451,4 +511,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   secondaryText: { color: "#FFF", fontWeight: "800" },
+  pressed: { opacity: 0.72 },
 });

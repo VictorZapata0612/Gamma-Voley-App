@@ -1,5 +1,5 @@
-import { router } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
@@ -19,10 +19,12 @@ export default function TeamsScreen() {
     }
   }, [db]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
-  }, [load]);
+  // Se ejecuta automáticamente cada vez que la pantalla entra en foco / se regresa a ella
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
   const maxTeams = 8;
   const isFull = teams.length >= maxTeams;
@@ -66,7 +68,7 @@ export default function TeamsScreen() {
         {/* Listado de Equipos */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Equipos Registrados ({teams.length})</Text>
-          <Text style={styles.sectionSubtitle}>Toca un equipo para ver nómina y elegibilidad</Text>
+          <Text style={styles.sectionSubtitle}>Toca un equipo para ver nómina, estado de pago y elegibilidad</Text>
         </View>
 
         {teams.length === 0 && !error ? (

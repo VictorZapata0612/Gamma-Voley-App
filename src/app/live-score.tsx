@@ -185,7 +185,9 @@ export default function LiveScoreScreen() {
               Ganador oficial: {match.winner === "home" ? match.homeName : match.awayName}
             </Text>
             <Text style={styles.winnerSub}>
-              {match.phase === "group"
+              {match.status === "walkover" && match.phase === "knockout"
+                ? "Ganado por W.O."
+                : match.phase === "group"
                 ? `Acumulado final: ${totalHome} - ${totalAway} (Dif. ${globalDiff} pts)`
                 : `Sets ganados: ${setsWonHome} - ${setsWonAway}`}
             </Text>

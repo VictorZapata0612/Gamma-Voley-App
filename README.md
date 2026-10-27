@@ -41,6 +41,10 @@ La prolongación no cuenta como set: un partido definido en prolongación es 1-1
 
 **Fase final**: semifinales A1 vs B2 y B1 vs A2, y final; al mejor de tres sets a 21 con diferencia de 2.
 
+**W.O.**: en grupos se registra 15-0 y 15-0 a favor del equipo presente. En semifinal o final, el equipo presente avanza (o queda campeón) sin marcador. Si la organización decide otro formato (por ejemplo, un triangular), se maneja de forma manual.
+
+**Orden de resultados**: las semifinales se generan solo cuando terminan los 12 partidos de grupos; después, los resultados de grupos quedan cerrados. Una semifinal no se puede corregir si la final ya comenzó.
+
 ## Pendiente
 
 - Sincronización con servidor, usuarios y permisos (las correcciones administrativas no están protegidas todavía).

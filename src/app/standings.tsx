@@ -216,7 +216,9 @@ export default function StandingsScreen() {
             </Text>
             {matchRecord && (
               <Text style={styles.setsSummaryText}>
-                {matchRecord.sets.map((s) => s.home).join(" - ")}
+                {matchRecord.status === "walkover"
+                  ? matchRecord.winner === "home" ? "Presente" : "W.O."
+                  : matchRecord.sets.map((s) => s.home).join(" - ")}
               </Text>
             )}
           </View>
@@ -235,7 +237,9 @@ export default function StandingsScreen() {
             </Text>
             {matchRecord && (
               <Text style={styles.setsSummaryText}>
-                {matchRecord.sets.map((s) => s.away).join(" - ")}
+                {matchRecord.status === "walkover"
+                  ? matchRecord.winner === "away" ? "Presente" : "W.O."
+                  : matchRecord.sets.map((s) => s.away).join(" - ")}
               </Text>
             )}
           </View>

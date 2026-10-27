@@ -305,11 +305,15 @@ export default function LiveScoreScreen() {
           })}
         </View>
 
-        {/* W.O.: only for group matches that have not started */}
-        {match.phase === "group" && match.status === "scheduled" && (
+        {/* W.O.: only for matches that have not started */}
+        {match.status === "scheduled" && (
           <View style={styles.history}>
             <Text style={styles.section}>W.O. · equipo que no se presentó</Text>
-            <Text style={styles.timeoutHint}>Se registra 15-0 y 15-0 a favor del equipo presente.</Text>
+            <Text style={styles.timeoutHint}>
+              {match.phase === "group"
+                ? "Se registra 15-0 y 15-0 a favor del equipo presente."
+                : "El equipo presente avanza sin marcador (en la final, queda campeón)."}
+            </Text>
             {pendingWalkover ? (
               <View style={styles.controls}>
                 <Pressable

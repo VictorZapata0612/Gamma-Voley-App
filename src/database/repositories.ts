@@ -304,18 +304,18 @@ export async function recordAdministrativeCorrection(db: SQLiteDatabase, matchId
   return updated;
 }
 
-// Records a no-show in the group phase with the official 15-0, 15-0 score for the team that showed up
+// Records a no-show. Group phase: official 15-0, 15-0 for the team that showed up.
+// Knockout: the team that showed up advances (or is champion in the final) with no score.
 export async function recordWalkover(db: SQLiteDatabase, matchId: string, absentTeam: "home" | "away"): Promise<LiveMatchRecord> {
   await db.execAsync("BEGIN TRANSACTION;");
   try {
     const match = await getLiveMatch(db, matchId);
     if (!match) throw new Error("El partido no existe.");
-    if (match.phase !== "group") throw new Error("El W.O. solo está definido para la fase de grupos.");
     if (match.status !== "scheduled") throw new Error("Solo se puede registrar W.O. en un partido que no ha comenzado.");
     const winner = absentTeam === "home" ? "away" : "home";
     const absentTeamId = absentTeam === "home" ? match.homeTeamId : match.awayTeamId;
     const now = new Date().toISOString();
-    const sets = walkoverSets(winner);
+    const sets = match.phase === "group" ? walkoverSets(winner) : [];
     await db.runAsync("DELETE FROM match_sets WHERE match_id = ?", matchId);
     for (const [index, set] of sets.entries()) {
       await db.runAsync(
@@ -325,7 +325,7 @@ export async function recordWalkover(db: SQLiteDatabase, matchId: string, absent
     }
     await db.runAsync(
       "UPDATE matches SET status = 'walkover', winner = ?, walkover_team_id = ?, current_set = ?, updated_at = ? WHERE id = ?",
-      winner, absentTeamId, sets.length, now, matchId
+      winner, absentTeamId, Math.max(sets.length, 1), now, matchId
     );
     const operationId = `walkover-${matchId}`;
     await db.runAsync(

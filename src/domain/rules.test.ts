@@ -14,6 +14,7 @@ import {
 import { calculateStandings } from "./standings";
 import { applyScoreAction, useTimeout } from "./scoring";
 import { deriveMatchProgress } from "./liveScoring";
+import { walkoverSets } from "./walkover";
 
 describe("reglas de sets y partidos", () => {
   it("cierra un set de grupos al alcanzar 15", () => {
@@ -181,13 +182,18 @@ describe("clasificación y cuadro", () => {
     expect(rows[1]).toMatchObject({ teamId: "b", classificationPoints: 1, pointDifferential: -2 });
   });
 
+  it("registra el W.O. de grupos como 15-0 y 15-0 a favor del que se presentó", () => {
+    expect(walkoverSets("home")).toEqual([{ home: 15, away: 0 }, { home: 15, away: 0 }]);
+    expect(walkoverSets("away")).toEqual([{ home: 0, away: 15 }, { home: 0, away: 15 }]);
+  });
+
   it("asigna tres puntos al ganador por W.O. y cero al que no se presentó", () => {
     const walkover = {
       matchId: "m4",
       phase: "group" as const,
       homeTeamId: "a",
       awayTeamId: "b",
-      sets: [],
+      sets: walkoverSets("home"),
       status: "walkover" as const,
       winner: "home" as const,
       walkoverTeamId: "b",
@@ -199,8 +205,8 @@ describe("clasificación y cuadro", () => {
       ],
       [walkover],
     );
-    expect(rows[0]).toMatchObject({ teamId: "a", classificationPoints: 3 });
-    expect(rows[1]).toMatchObject({ teamId: "b", classificationPoints: 0 });
+    expect(rows[0]).toMatchObject({ teamId: "a", classificationPoints: 3, pointDifferential: 30 });
+    expect(rows[1]).toMatchObject({ teamId: "b", classificationPoints: 0, pointDifferential: -30 });
   });
 
   it("asigna dos puntos al ganador cuando el partido termina 1-1", () => {

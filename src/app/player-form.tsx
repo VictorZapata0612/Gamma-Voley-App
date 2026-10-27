@@ -11,7 +11,7 @@ export default function PlayerFormScreen() {
   useEffect(() => { if (id) void getPlayer(db, id).then((player) => { if (player) { setName(player.name); setGender(player.gender); setJersey(player.jerseyNumber?.toString() ?? ""); } }); }, [db, id]);
   async function submit() {
     const player: PlayerRecord = { id: id ?? `player-${Date.now()}`, teamId, name, gender, jerseyNumber: jersey ? Number(jersey) : null, eligibility: "pending_review" };
-    try { await savePlayer(db, player); router.replace({ pathname: "/team/[id]", params: { id: teamId } }); } catch (reason) { setError(reason instanceof Error ? reason.message : "No se pudo guardar el jugador."); }
+    try { await savePlayer(db, player); router.back(); } catch (reason) { setError(reason instanceof Error ? reason.message : "No se pudo guardar el jugador."); }
   }
   return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.container}><Pressable onPress={() => router.back()}><Text style={styles.back}>‹ Equipo</Text></Pressable><Text style={styles.eyebrow}>PLANTILLA</Text><Text style={styles.title}>{id ? "Editar jugador" : "Registrar jugador"}</Text>
     <Text style={styles.label}>Nombre del jugador</Text><TextInput value={name} onChangeText={setName} placeholder="Nombre completo" placeholderTextColor="#70737C" style={styles.input} />

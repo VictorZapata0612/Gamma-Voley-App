@@ -2,7 +2,21 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
-import { deleteTeam, getTeamRecord, listPlayers, type PlayerRecord, type TeamRecord } from "@/database/repositories";
+import {
+  deleteTeam,
+  getTeamRecord,
+  listPlayers,
+  updatePlayerEligibility,
+  updateTeamStatus,
+  type PlayerRecord,
+  type TeamRecord,
+} from "@/database/repositories";
+
+const NEXT_ELIGIBILITY: Record<PlayerRecord["eligibility"], PlayerRecord["eligibility"]> = {
+  pending_review: "eligible",
+  eligible: "ineligible",
+  ineligible: "pending_review",
+};
 
 export default function TeamDetailScreen() {
   const db = useSQLiteContext();
@@ -37,6 +51,25 @@ export default function TeamDetailScreen() {
     }
   }, [db, teamId]);
 
+  async function changeTeamStatus(changes: Parameters<typeof updateTeamStatus>[2]) {
+    if (!teamId) return;
+    try {
+      await updateTeamStatus(db, teamId, changes);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo actualizar el equipo.");
+    }
+  }
+
+  async function cycleEligibility(player: PlayerRecord) {
+    try {
+      await updatePlayerEligibility(db, player.id, NEXT_ELIGIBILITY[player.eligibility]);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo actualizar la elegibilidad.");
+    }
+  }
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
@@ -46,7 +79,7 @@ export default function TeamDetailScreen() {
     if (!teamId) return;
     try {
       await deleteTeam(db, teamId);
-      router.replace("/teams");
+      router.back();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No se pudo eliminar el equipo.");
     }
@@ -116,19 +149,29 @@ export default function TeamDetailScreen() {
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
               <Text style={styles.metaLabel}>Inscripción ($150.000)</Text>
-              <View style={[styles.statusBadge, team.paymentStatus === "paid" ? styles.badgePaid : styles.badgePending]}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Cambiar estado de pago"
+                onPress={() => void changeTeamStatus({ paymentStatus: team.paymentStatus === "paid" ? "pending" : "paid" })}
+                style={[styles.statusBadge, team.paymentStatus === "paid" ? styles.badgePaid : styles.badgePending]}
+              >
                 <Text style={styles.statusBadgeText}>
-                  {team.paymentStatus === "paid" ? "✓ Pagado" : "Pendiente de pago"}
+                  {team.paymentStatus === "paid" ? "✓ Pagado" : "Pendiente de pago"} · tocar para cambiar
                 </Text>
-              </View>
+              </Pressable>
             </View>
             <View style={styles.metaItem}>
               <Text style={styles.metaLabel}>Estado Registro</Text>
-              <View style={[styles.statusBadge, team.registrationStatus === "confirmed" ? styles.badgeConfirmed : styles.badgePending]}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Cambiar estado de inscripción"
+                onPress={() => void changeTeamStatus({ registrationStatus: team.registrationStatus === "confirmed" ? "pending" : "confirmed" })}
+                style={[styles.statusBadge, team.registrationStatus === "confirmed" ? styles.badgeConfirmed : styles.badgePending]}
+              >
                 <Text style={styles.statusBadgeText}>
-                  {team.registrationStatus === "confirmed" ? "Confirmado" : "Pendiente"}
+                  {team.registrationStatus === "confirmed" ? "Confirmado" : "Pendiente"} · tocar para cambiar
                 </Text>
-              </View>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -214,7 +257,10 @@ export default function TeamDetailScreen() {
                     <Text style={styles.genderBadge}>
                       {player.gender === "female" ? "👩 Mujer" : "👨 Hombre"}
                     </Text>
-                    <View
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Cambiar elegibilidad de ${player.name}`}
+                      onPress={() => void cycleEligibility(player)}
                       style={[
                         styles.eligibilityBadge,
                         isEligible
@@ -240,7 +286,7 @@ export default function TeamDetailScreen() {
                           ? "⏳ Revisión"
                           : "✕ No elegible"}
                       </Text>
-                    </View>
+                    </Pressable>
                   </View>
                 </View>
               </View>

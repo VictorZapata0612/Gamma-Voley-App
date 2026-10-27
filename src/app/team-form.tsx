@@ -16,7 +16,7 @@ export default function TeamFormScreen() {
   async function submit() {
     try {
       await saveTeamRecord(db, { id: id ?? `team-${Date.now()}`, tournamentId: DEFAULT_TOURNAMENT_ID, name, captainName: captain || null, contact: contact || null, registrationStatus: "pending", paymentStatus: "pending" });
-      router.replace("/teams");
+      router.back();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "No se pudo guardar el equipo."); }
   }
   return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.container}>

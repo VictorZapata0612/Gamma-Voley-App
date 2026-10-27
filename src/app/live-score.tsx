@@ -7,6 +7,7 @@ import {
   recordAdministrativeCorrection,
   recordLiveScoreAction,
   recordMatchTimeout,
+  recordWalkover,
   type LiveMatchRecord,
   type ScoreEventRecord,
 } from "@/database/repositories";
@@ -25,6 +26,7 @@ export default function LiveScoreScreen() {
   const [showHistory, setShowHistory] = useState(false);
   // Blocks a second tap while the previous action is still being saved
   const savingRef = useRef(false);
+  const [pendingWalkover, setPendingWalkover] = useState<"home" | "away" | null>(null);
 
   const load = useCallback(async () => {
     if (!matchId) {
@@ -104,6 +106,20 @@ export default function LiveScoreScreen() {
     }
   }
 
+  async function confirmWalkover() {
+    if (!match || !pendingWalkover || savingRef.current) return;
+    savingRef.current = true;
+    try {
+      setMatch(await recordWalkover(db, match.id, pendingWalkover));
+      setPendingWalkover(null);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo registrar el W.O.");
+    } finally {
+      savingRef.current = false;
+    }
+  }
+
   async function timeout(team: "home" | "away") {
     if (!match) return;
     try {
@@ -135,10 +151,7 @@ export default function LiveScoreScreen() {
   const setsWonAway = match.sets.filter((s) => s.away >= 21 && s.away - s.home >= 2).length;
 
   const isProlonged =
-    match.phase === "group"
-      ? match.currentSet === 3
-      : Math.max(current.home, current.away) > 21 ||
-        (Math.max(current.home, current.away) === 21 && Math.abs(current.home - current.away) < 2);
+    match.phase === "group" && match.currentSet === 3;
 
   const setLabel = (setNumber: number) =>
     match.phase === "group" && setNumber === 3 ? "Prolongación" : `Set ${setNumber}`;
@@ -281,7 +294,7 @@ export default function LiveScoreScreen() {
               <View style={styles.setRow} key={index}>
                 <View style={styles.setCol}>
                   <Text style={styles.setText}>{setLabel(index + 1)}</Text>
-                  {isCurrent && <Text style={styles.activeSetBadge}>En juego</Text>}
+                  {isCurrent && !closed && <Text style={styles.activeSetBadge}>En juego</Text>}
                 </View>
                 <Text style={styles.setScore}>
                   {toDisplaySetScore(match.phase, index + 1, set).home} - {toDisplaySetScore(match.phase, index + 1, set).away}
@@ -290,6 +303,45 @@ export default function LiveScoreScreen() {
             );
           })}
         </View>
+
+        {/* W.O.: only for group matches that have not started */}
+        {match.phase === "group" && match.status === "scheduled" && (
+          <View style={styles.history}>
+            <Text style={styles.section}>W.O. · equipo que no se presentó</Text>
+            <Text style={styles.timeoutHint}>Se registra 15-0 y 15-0 a favor del equipo presente.</Text>
+            {pendingWalkover ? (
+              <View style={styles.controls}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => void confirmWalkover()}
+                  style={[styles.walkoverButton, styles.plus]}
+                >
+                  <Text style={styles.walkoverText}>
+                    Confirmar W.O. de {pendingWalkover === "home" ? match.homeName : match.awayName}
+                  </Text>
+                </Pressable>
+                <Pressable accessibilityRole="button" onPress={() => setPendingWalkover(null)} style={[styles.walkoverButton, styles.minus]}>
+                  <Text style={styles.walkoverText}>Cancelar</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <View style={styles.controls}>
+                {(["home", "away"] as const).map((team) => (
+                  <Pressable
+                    key={team}
+                    accessibilityRole="button"
+                    onPress={() => setPendingWalkover(team)}
+                    style={[styles.walkoverButton, styles.minus]}
+                  >
+                    <Text style={styles.walkoverText} numberOfLines={1}>
+                      No llegó {team === "home" ? match.homeName : match.awayName}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
 
         {/* Tiempos Muertos del Set Activo */}
         <View style={styles.timeoutRow}>
@@ -325,7 +377,7 @@ export default function LiveScoreScreen() {
                   match.timeouts.homeUsed ? styles.badgeUsed : styles.badgeAvailable,
                 ]}
               >
-                {match.timeouts.homeUsed ? "✓ Utilizado" : "⏱ Pedir 30 s"}
+                {match.timeouts.homeUsed ? "✓ Utilizado" : closed ? "Partido cerrado" : "⏱ Pedir 30 s"}
               </Text>
             </Pressable>
 
@@ -355,7 +407,7 @@ export default function LiveScoreScreen() {
                   match.timeouts.awayUsed ? styles.badgeUsed : styles.badgeAvailable,
                 ]}
               >
-                {match.timeouts.awayUsed ? "✓ Utilizado" : "⏱ Pedir 30 s"}
+                {match.timeouts.awayUsed ? "✓ Utilizado" : closed ? "Partido cerrado" : "⏱ Pedir 30 s"}
               </Text>
             </Pressable>
           </View>
@@ -401,7 +453,7 @@ export default function LiveScoreScreen() {
             <View style={styles.correctionControlsRow}>
               <View style={styles.correctionTeamCol}>
                 <Text style={styles.correctionTeamName} numberOfLines={1}>{match.homeName}</Text>
-                <Text style={styles.correctionPoints}>{targetSetScore.home}</Text>
+                <Text style={styles.correctionPoints}>{toDisplaySetScore(match.phase, selectedSet, targetSetScore).home}</Text>
                 <View style={styles.controls}>
                   <Pressable
                     onPress={() => void correctSetScore("home", -1)}
@@ -421,7 +473,7 @@ export default function LiveScoreScreen() {
 
               <View style={styles.correctionTeamCol}>
                 <Text style={styles.correctionTeamName} numberOfLines={1}>{match.awayName}</Text>
-                <Text style={styles.correctionPoints}>{targetSetScore.away}</Text>
+                <Text style={styles.correctionPoints}>{toDisplaySetScore(match.phase, selectedSet, targetSetScore).away}</Text>
                 <View style={styles.controls}>
                   <Pressable
                     onPress={() => void correctSetScore("away", -1)}
@@ -462,7 +514,7 @@ export default function LiveScoreScreen() {
           accessibilityLabel="Ver historial de eventos"
         >
           <Text style={styles.historyToggleText}>
-            {showHistory ? "Ocultar historial de eventos" : `Ver eventos recientes (${match.recentEvents.length})`}
+            {showHistory ? "Ocultar historial de eventos" : "Ver últimos 15 eventos"}
           </Text>
         </Pressable>
 
@@ -478,8 +530,8 @@ export default function LiveScoreScreen() {
                     <Text style={[styles.eventBadge, event.delta > 0 ? styles.eventPlus : styles.eventMinus]}>
                       {event.delta > 0 ? "+1" : "−1"} {event.team === "home" ? match.homeName : match.awayName}
                     </Text>
-                    <Text style={styles.eventSet}>Set {event.setNumber}</Text>
-                    <Text style={styles.eventTime}>{event.createdAt.slice(11, 19)}</Text>
+                    <Text style={styles.eventSet}>{setLabel(event.setNumber)}</Text>
+                    <Text style={styles.eventTime}>{new Date(event.createdAt).toLocaleTimeString("es-CO", { hour12: false })}</Text>
                   </View>
                   {event.reason && (
                     <Text style={styles.eventReason}>Motivo: {event.reason}</Text>
@@ -515,26 +567,24 @@ function TeamScore({
         {name}
       </Text>
       <Text style={styles.points}>{points}</Text>
-      <View style={styles.controls}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Restar punto a ${name}`}
-          disabled={disabled || points === 0}
-          onPress={onMinus}
-          style={[styles.button, styles.minus, (disabled || points === 0) && styles.dimmed]}
-        >
-          <Text style={styles.buttonText}>−</Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Sumar punto a ${name}`}
-          disabled={disabled}
-          onPress={onPlus}
-          style={[styles.button, styles.plus, disabled && styles.dimmed]}
-        >
-          <Text style={styles.buttonText}>+</Text>
-        </Pressable>
-      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Sumar punto a ${name}`}
+        disabled={disabled}
+        onPress={onPlus}
+        style={[styles.scorePlus, styles.plus, disabled && styles.dimmed]}
+      >
+        <Text style={styles.buttonText}>+1</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Restar punto a ${name}`}
+        disabled={disabled || points === 0}
+        onPress={onMinus}
+        style={[styles.scoreMinus, styles.minus, (disabled || points === 0) && styles.dimmed]}
+      >
+        <Text style={styles.scoreMinusText}>−1 (corrección)</Text>
+      </Pressable>
     </View>
   );
 }
@@ -642,6 +692,11 @@ const styles = StyleSheet.create({
   vsContainer: { width: 32, alignItems: "center" },
   vs: { color: "#70737C", fontWeight: "900", fontSize: 12 },
   controls: { flexDirection: "row", gap: 8 },
+  scorePlus: { alignSelf: "stretch", height: 88, borderRadius: 18, alignItems: "center", justifyContent: "center", marginTop: 8 },
+  scoreMinus: { alignSelf: "stretch", height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", marginTop: 24 },
+  scoreMinusText: { color: "#FFF", fontSize: 13, fontWeight: "700" },
+  walkoverButton: { flex: 1, minHeight: 48, borderRadius: 12, alignItems: "center", justifyContent: "center", paddingHorizontal: 10, marginTop: 10 },
+  walkoverText: { color: "#FFF", fontSize: 13, fontWeight: "800", textAlign: "center" },
   button: {
     width: 48,
     height: 48,

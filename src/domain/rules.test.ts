@@ -13,6 +13,7 @@ import {
 } from "./rules";
 import { calculateStandings } from "./standings";
 import { applyScoreAction, useTimeout } from "./scoring";
+import { deriveMatchProgress } from "./liveScoring";
 
 describe("reglas de sets y partidos", () => {
   it("cierra un set de grupos al alcanzar 15", () => {
@@ -338,5 +339,35 @@ describe("Reglas de Cierre de Set y Prolongación (Gamma Voley 2026)", () => {
     expect(isSetClosed("knockout", { home: 21, away: 19 }, 1, [])).toBe(true);
     expect(isSetClosed("knockout", { home: 21, away: 20 }, 1, [])).toBe(false);
     expect(isSetClosed("knockout", { home: 22, away: 20 }, 1, [])).toBe(true);
+  });
+});
+describe("progreso del partido derivado de los sets", () => {
+  it("abre el set 2 cuando cierra el set 1 de grupos", () => {
+    expect(deriveMatchProgress("group", [{ home: 15, away: 9 }])).toEqual({ setCount: 2, winner: null });
+  });
+
+  it("abre la prolongación cuando el global queda empatado", () => {
+    const sets = [{ home: 15, away: 10 }, { home: 10, away: 15 }];
+    expect(deriveMatchProgress("group", sets)).toEqual({ setCount: 3, winner: null });
+  });
+
+  it("quita la prolongación si una corrección rompe el empate global", () => {
+    const sets = [{ home: 15, away: 10 }, { home: 11, away: 15 }, { home: 0, away: 0 }];
+    expect(deriveMatchProgress("group", sets)).toEqual({ setCount: 2, winner: "home" });
+  });
+
+  it("reabre el set 2 si una corrección lo deja por debajo de 15", () => {
+    const sets = [{ home: 15, away: 10 }, { home: 10, away: 14 }];
+    expect(deriveMatchProgress("group", sets)).toEqual({ setCount: 2, winner: null });
+  });
+
+  it("termina la eliminación directa 2-0 sin abrir el tercer set", () => {
+    const sets = [{ home: 21, away: 18 }, { home: 21, away: 19 }];
+    expect(deriveMatchProgress("knockout", sets)).toEqual({ setCount: 2, winner: "home" });
+  });
+
+  it("abre el tercer set de eliminación directa con 1-1", () => {
+    const sets = [{ home: 21, away: 18 }, { home: 19, away: 21 }];
+    expect(deriveMatchProgress("knockout", sets)).toEqual({ setCount: 3, winner: null });
   });
 });

@@ -2,8 +2,8 @@ import type { SQLiteDatabase } from "expo-sqlite";
 import type { GroupId, Match, MatchResult, ScoreAction, SemifinalBracket, SetScore, Team, TimeoutState } from "@/domain/types";import type { Player } from "@/domain/eligibility";
 import { MAX_ROSTER_SIZE } from "@/domain/eligibility";
 import type { ScheduledGroupMatch } from "@/domain/schedule";
-import { canCloseSet, isOfficialMatchComplete } from "@/domain/liveScoring";
-import { getGroupMatchWinner, getKnockoutMatchWinner, getTimeoutSetNumber, needsProlongation } from "@/domain/rules";
+import { deriveMatchProgress, type MatchProgress } from "@/domain/liveScoring";
+import { getTimeoutSetNumber } from "@/domain/rules";
 
 type TeamRow = {
   id: string;
@@ -195,27 +195,8 @@ export async function recordLiveScoreAction(db: SQLiteDatabase, matchId: string,
     await db.runAsync("INSERT INTO score_events (id, match_id, set_number, team, delta, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", action.id, matchId, setNumber, action.team, action.delta, action.reason ?? null, now);
     const column = action.team === "home" ? "home_points" : "away_points";
     await db.runAsync(`UPDATE match_sets SET ${column} = ${column} + ? WHERE match_id = ? AND set_number = ?`, action.delta, matchId, setNumber);
-    await db.runAsync("UPDATE matches SET status = 'in_progress', updated_at = ? WHERE id = ? AND status = 'scheduled'", now, matchId);
     const updatedSets = match.sets.map((set, index) => index === setNumber - 1 ? next : set);
-    if (canCloseSet(match.phase, setNumber, next, updatedSets.slice(0, setNumber - 1))) {
-      await db.runAsync("UPDATE match_sets SET closed_at = ? WHERE match_id = ? AND set_number = ?", now, matchId, setNumber);
-      if (isOfficialMatchComplete(match.phase, updatedSets)) {
-        const winner = match.phase === "group" ? getGroupMatchWinner(updatedSets) : getKnockoutMatchWinner(updatedSets);
-        await db.runAsync("UPDATE matches SET status = 'completed', winner = ?, updated_at = ? WHERE id = ?", winner, now, matchId);
-      } else if (match.phase === "group") {
-        // Set 1 opens set 2; a tied global after set 2 opens the prolongation (set 3, shown from 15-15)
-        if (setNumber === 1 || (setNumber === 2 && needsProlongation(updatedSets))) {
-          await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES (?, ?, 0, 0)", matchId, setNumber + 1);
-          await db.runAsync("UPDATE matches SET current_set = ?, updated_at = ? WHERE id = ?", setNumber + 1, now, matchId);
-        }
-      } else {
-        const newSetNumber = setNumber + 1;
-        if (newSetNumber <= 3) {
-          await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES (?, ?, 0, 0)", matchId, newSetNumber);
-          await db.runAsync("UPDATE matches SET current_set = ?, updated_at = ? WHERE id = ?", newSetNumber, now, matchId);
-        }
-      }
-    }
+    await syncMatchProgress(db, matchId, match.phase, updatedSets, now);
     await enqueueSyncOperation(db, `sync-${action.id}`, "match", matchId, "record_score_action", {
       actionId: action.id,
       setNumber,
@@ -234,30 +215,60 @@ export async function recordLiveScoreAction(db: SQLiteDatabase, matchId: string,
   return updated;
 }
 
+// Keeps set rows, closed sets, current set, status and winner consistent with the set scores
+async function syncMatchProgress(
+  db: SQLiteDatabase,
+  matchId: string,
+  phase: Match["phase"],
+  sets: SetScore[],
+  now: string
+): Promise<MatchProgress> {
+  const progress = deriveMatchProgress(phase, sets);
+  const orphan = sets.findIndex((set, index) => index >= progress.setCount && (set.home > 0 || set.away > 0));
+  if (orphan >= 0) {
+    const label = phase === "group" && orphan === 2 ? "la prolongación" : `el set ${orphan + 1}`;
+    throw new Error(`Esta corrección deja sin efecto ${label}, que tiene puntos. Corrige primero ${label} a 0-0.`);
+  }
+  await db.runAsync("DELETE FROM match_sets WHERE match_id = ? AND set_number > ?", matchId, progress.setCount);
+  for (let setNumber = 1; setNumber <= progress.setCount; setNumber += 1) {
+    await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES (?, ?, 0, 0)", matchId, setNumber);
+    if (setNumber < progress.setCount || progress.winner) {
+      await db.runAsync("UPDATE match_sets SET closed_at = COALESCE(closed_at, ?) WHERE match_id = ? AND set_number = ?", now, matchId, setNumber);
+    } else {
+      await db.runAsync("UPDATE match_sets SET closed_at = NULL WHERE match_id = ? AND set_number = ?", matchId, setNumber);
+    }
+  }
+  await db.runAsync(
+    "UPDATE matches SET status = ?, winner = ?, current_set = ?, updated_at = ? WHERE id = ?",
+    progress.winner ? "completed" : "in_progress",
+    progress.winner,
+    progress.setCount,
+    now,
+    matchId
+  );
+  return progress;
+}
+
 export async function recordAdministrativeCorrection(db: SQLiteDatabase, matchId: string, action: ScoreAction): Promise<LiveMatchRecord> {
   if (!action.reason?.trim()) throw new Error("La corrección requiere un motivo.");
-  const match = await getLiveMatch(db, matchId);
-  if (!match) throw new Error("El partido no existe.");
-  const setNumber = action.setNumber ?? match.currentSet;
-  const current = match.sets[setNumber - 1];
-  if (!current) throw new Error(`El set ${setNumber} no existe o no está inicializado.`);
-  const next = { ...current, [action.team]: current[action.team] + action.delta };
-  if (next.home < 0 || next.away < 0) throw new Error("La corrección no puede dejar el marcador negativo.");
   await db.execAsync("BEGIN TRANSACTION;");
   try {
+    const match = await getLiveMatch(db, matchId);
+    if (!match) throw new Error("El partido no existe.");
+    if (match.status === "walkover") throw new Error("Un partido definido por W.O. no tiene marcador que corregir.");
+    const setNumber = action.setNumber ?? match.currentSet;
+    const current = match.sets[setNumber - 1];
+    if (!current) throw new Error(`El set ${setNumber} no existe o no está inicializado.`);
+    const next = { ...current, [action.team]: current[action.team] + action.delta };
+    if (next.home < 0 || next.away < 0) throw new Error("La corrección no puede dejar el marcador negativo.");
     const now = new Date().toISOString();
     await db.runAsync("INSERT INTO score_events (id, match_id, set_number, team, delta, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", action.id, matchId, setNumber, action.team, action.delta, action.reason, now);
-    await db.runAsync(`UPDATE match_sets SET ${action.team === "home" ? "home_points" : "away_points"} = ? WHERE match_id = ? AND set_number = ?`, next[action.team], matchId, setNumber);
+    const column = action.team === "home" ? "home_points" : "away_points";
+    await db.runAsync(`UPDATE match_sets SET ${column} = ${column} + ? WHERE match_id = ? AND set_number = ?`, action.delta, matchId, setNumber);
     const sets = match.sets.map((set, index) => index === setNumber - 1 ? next : set);
-    const isComplete = isOfficialMatchComplete(match.phase, sets);
-    const winner = isComplete
-      ? match.phase === "group"
-        ? getGroupMatchWinner(sets)
-        : getKnockoutMatchWinner(sets)
-      : null;
-    const nextStatus = isComplete ? "completed" : "in_progress";
-    await db.runAsync("UPDATE matches SET status = ?, winner = ?, updated_at = ? WHERE id = ?", nextStatus, winner, now, matchId);
-    await db.runAsync("INSERT INTO audit_log (id, entity_type, entity_id, action, details_json, created_at) VALUES (?, 'match', ?, 'score_correction', ?, ?)", `audit-${action.id}`, matchId, JSON.stringify({ ...action, setNumber, previous: current, next }), now);
+    const progress = await syncMatchProgress(db, matchId, match.phase, sets, now);
+    const nextStatus = progress.winner ? "completed" : "in_progress";
+    await db.runAsync("INSERT INTO audit_log (id, entity_type, entity_id, action, details_json, created_at) VALUES (?, 'match', ?, 'score_correction', ?, ?)", `audit-${action.id}`, matchId, JSON.stringify({ ...action, setNumber, previous: current, next, previousStatus: match.status, previousWinner: match.winner, nextStatus, winner: progress.winner }), now);
     await enqueueSyncOperation(db, `sync-${action.id}`, "match", matchId, "score_correction", {
       actionId: action.id,
       setNumber,
@@ -266,7 +277,7 @@ export async function recordAdministrativeCorrection(db: SQLiteDatabase, matchId
       reason: action.reason,
       score: next,
       status: nextStatus,
-      winner,
+      winner: progress.winner,
       timestamp: now,
     });
     await db.execAsync("COMMIT;");

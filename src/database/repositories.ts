@@ -248,6 +248,19 @@ async function syncMatchProgress(
   return progress;
 }
 
+// A result that already fed a later round cannot change silently: the later round must not have started
+async function assertNoStartedDependents(db: SQLiteDatabase, matchId: string, phase: Match["phase"]): Promise<void> {
+  if (phase === "group") {
+    const semifinal = await db.getFirstAsync<{ id: string }>("SELECT id FROM matches WHERE id IN ('sf-1', 'sf-2') LIMIT 1");
+    if (semifinal) throw new Error("Las semifinales ya fueron generadas con esta clasificación; los resultados de grupos quedan cerrados.");
+    return;
+  }
+  if (matchId === "sf-1" || matchId === "sf-2") {
+    const final = await db.getFirstAsync<{ status: string }>("SELECT status FROM matches WHERE id = 'final'");
+    if (final && final.status !== "scheduled") throw new Error("La final ya comenzó con este resultado; no se puede corregir la semifinal.");
+  }
+}
+
 export async function recordAdministrativeCorrection(db: SQLiteDatabase, matchId: string, action: ScoreAction): Promise<LiveMatchRecord> {
   if (!action.reason?.trim()) throw new Error("La corrección requiere un motivo.");
   await db.execAsync("BEGIN TRANSACTION;");
@@ -255,6 +268,7 @@ export async function recordAdministrativeCorrection(db: SQLiteDatabase, matchId
     const match = await getLiveMatch(db, matchId);
     if (!match) throw new Error("El partido no existe.");
     if (match.status === "walkover") throw new Error("Un partido definido por W.O. no tiene marcador que corregir.");
+    await assertNoStartedDependents(db, matchId, match.phase);
     const setNumber = action.setNumber ?? match.currentSet;
     const current = match.sets[setNumber - 1];
     if (!current) throw new Error(`El set ${setNumber} no existe o no está inicializado.`);
@@ -655,6 +669,9 @@ export async function createKnockoutBracketMatches(
   tournamentId: string,
   bracket: SemifinalBracket
 ): Promise<void> {
+  if (!(await isGroupPhaseFinished(db, tournamentId))) {
+    throw new Error("Las semifinales se generan cuando terminan todos los partidos de grupos.");
+  }
   const now = new Date().toISOString();
   await db.execAsync("BEGIN TRANSACTION;");
   try {
@@ -703,6 +720,13 @@ export async function unlockFinalMatchIfReady(
   const sf1Done = sf1.status === "completed" || sf1.status === "walkover";
   const sf2Done = sf2.status === "completed" || sf2.status === "walkover";
 
+  // A final that has not started follows the semifinals; once it starts its teams are fixed
+  if (!(sf1Done && sf2Done && sf1.winner && sf2.winner)) {
+    await db.runAsync("DELETE FROM match_sets WHERE match_id = 'final' AND EXISTS (SELECT 1 FROM matches WHERE id = 'final' AND status = 'scheduled')");
+    await db.runAsync("DELETE FROM matches WHERE id = 'final' AND status = 'scheduled'");
+    return false;
+  }
+
   if (sf1Done && sf2Done && sf1.winner && sf2.winner) {
     const winner1Id = sf1.winner === "home" ? sf1.home_team_id : sf1.away_team_id;
     const winner2Id = sf2.winner === "home" ? sf2.home_team_id : sf2.away_team_id;
@@ -713,7 +737,8 @@ export async function unlockFinalMatchIfReady(
       await db.runAsync(
         `INSERT INTO matches (id, tournament_id, phase, home_team_id, away_team_id, court_number, status, current_set, created_at, updated_at)
          VALUES ('final', ?, 'knockout', ?, ?, 1, 'scheduled', 1, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET home_team_id = excluded.home_team_id, away_team_id = excluded.away_team_id, updated_at = excluded.updated_at`,
+         ON CONFLICT(id) DO UPDATE SET home_team_id = excluded.home_team_id, away_team_id = excluded.away_team_id, updated_at = excluded.updated_at
+         WHERE matches.status = 'scheduled'`,
         tournamentId, winner1Id, winner2Id, now, now
       );
       await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('final', 1, 0, 0)");

@@ -289,6 +289,14 @@ export default function TeamDetailScreen() {
                     </Pressable>
                   </View>
                 </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Editar a ${player.name}`}
+                  onPress={() => router.push({ pathname: "/player-form", params: { teamId: team.id, id: player.id } })}
+                  style={styles.editPlayer}
+                >
+                  <Text style={styles.editPlayerText}>Editar</Text>
+                </Pressable>
               </View>
             );
           })
@@ -460,6 +468,8 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 4,
   },
+  editPlayer: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: "#24262C", marginLeft: 8 },
+  editPlayerText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
   eligibilityBadge: {
     paddingHorizontal: 6,
     paddingVertical: 2,

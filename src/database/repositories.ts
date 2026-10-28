@@ -104,7 +104,7 @@ export async function saveScheduledGroupMatches(
   try {
     const now = new Date().toISOString();
     for (const match of matches) {
-      await db.runAsync(
+      const inserted = await db.runAsync(
         `INSERT OR IGNORE INTO matches
           (id, tournament_id, phase, group_id, home_team_id, away_team_id, court_number, status, current_set, created_at, updated_at)
          VALUES (?, ?, 'group', ?, ?, ?, ?, 'scheduled', 1, ?, ?)`,
@@ -126,7 +126,9 @@ export async function saveScheduledGroupMatches(
         match.id
       );
 
-      // Encolar para la sincronización remota
+      // Encolar para la sincronización remota solo si el partido es nuevo:
+      // regenerar el calendario no debe duplicar la operación (operation_id es único)
+      if (inserted.changes === 0) continue;
       await enqueueSyncOperation(
         db,
         `sync-match-${match.id}`,
@@ -453,7 +455,7 @@ export async function saveTeam(
 
     await enqueueSyncOperation(
       db,
-      `sync-team-${team.id}`,
+      `sync-team-${team.id}-${Date.now()}`,
       "team",
       team.id,
       "save_team",
@@ -509,6 +511,13 @@ export async function saveTeamRecord(
   if (!team.name.trim()) {
     throw new Error("El nombre del equipo es obligatorio.");
   }
+
+  // Checked explicitly: on web, expo-sqlite reports constraint errors without "UNIQUE" in the message
+  const sameName = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM teams WHERE tournament_id = ? AND name = ? AND id <> ?",
+    team.tournamentId, team.name.trim(), team.id
+  );
+  if (sameName) throw new Error("Ya existe un equipo con ese nombre en este torneo.");
 
   const now = new Date().toISOString();
 
@@ -606,14 +615,6 @@ export async function savePlayer(
   player: PlayerRecord
 ): Promise<void> {
   if (!player.name.trim()) throw new Error("El nombre del jugador es obligatorio.");
-  const rosterCount = await db.getFirstAsync<{ count: number }>(
-    "SELECT COUNT(*) AS count FROM players WHERE team_id = ? AND id <> ?",
-    player.teamId,
-    player.id
-  );
-  if ((rosterCount?.count ?? 0) >= MAX_ROSTER_SIZE) {
-    throw new Error(`La nómina no puede superar ${MAX_ROSTER_SIZE} jugadores.`);
-  }
   const activeDuplicate = await db.getFirstAsync<{ id: string }>(
     "SELECT id FROM players WHERE lower(name) = lower(?) AND id <> ? AND eligibility_status <> 'ineligible'",
     player.name.trim(), player.id
@@ -621,16 +622,44 @@ export async function savePlayer(
   if (activeDuplicate) {
     throw new Error("Este jugador ya está registrado en otra plantilla activa y requiere revisión administrativa.");
   }
+  if (player.jerseyNumber !== null) {
+    const jerseyTaken = await db.getFirstAsync<{ id: string }>(
+      "SELECT id FROM players WHERE team_id = ? AND jersey_number = ? AND id <> ?",
+      player.teamId, player.jerseyNumber, player.id
+    );
+    if (jerseyTaken) throw new Error(`El número ${player.jerseyNumber} ya lo usa otro jugador del equipo.`);
+  }
   const now = new Date().toISOString();
-  await db.runAsync(
-    `INSERT INTO players (id, team_id, name, gender, jersey_number, eligibility_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET team_id = excluded.team_id, name = excluded.name,
-      gender = excluded.gender, jersey_number = excluded.jersey_number,
-      eligibility_status = excluded.eligibility_status, updated_at = excluded.updated_at`,
-    player.id, player.teamId, player.name.trim(), player.gender, player.jerseyNumber,
-    player.eligibility, now, now
-  );
+  await db.execAsync("BEGIN TRANSACTION;");
+  try {
+    // Editing a player never resets eligibility; that only changes through updatePlayerEligibility
+    await db.runAsync(
+      `INSERT INTO players (id, team_id, name, gender, jersey_number, eligibility_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET team_id = excluded.team_id, name = excluded.name,
+        gender = excluded.gender, jersey_number = excluded.jersey_number, updated_at = excluded.updated_at`,
+      player.id, player.teamId, player.name.trim(), player.gender, player.jerseyNumber,
+      player.eligibility, now, now
+    );
+    await enqueuePlayerSync(db, player.id);
+    await db.execAsync("COMMIT;");
+  } catch (error) {
+    await db.execAsync("ROLLBACK;");
+    throw error;
+  }
+}
+
+// Queues the player's current local row so the server receives the persisted state
+async function enqueuePlayerSync(db: SQLiteDatabase, playerId: string): Promise<void> {
+  const player = await getPlayer(db, playerId);
+  if (!player) return;
+  await enqueueSyncOperation(db, `sync-player-${playerId}-${Date.now()}`, "player", playerId, "save_player", {
+    teamId: player.teamId,
+    name: player.name,
+    gender: player.gender,
+    jerseyNumber: player.jerseyNumber,
+    eligibility: player.eligibility,
+  });
 }
 
 // Administrative status changes are audited; editing a team or player never resets them
@@ -657,6 +686,13 @@ export async function updateTeamStatus(
       `audit-team-${teamId}-${Date.now()}`, teamId,
       JSON.stringify({ previous: { paymentStatus: current.paymentStatus, registrationStatus: current.registrationStatus }, next }), now
     );
+    await enqueueSyncOperation(db, `sync-team-${teamId}-${Date.now()}`, "team", teamId, "save_team", {
+      tournamentId: current.tournamentId,
+      name: current.name,
+      captainName: current.captainName,
+      contact: current.contact,
+      ...next,
+    });
     await db.execAsync("COMMIT;");
   } catch (error) {
     await db.execAsync("ROLLBACK;");
@@ -676,6 +712,7 @@ export async function updatePlayerEligibility(db: SQLiteDatabase, playerId: stri
       `audit-player-${playerId}-${Date.now()}`, playerId,
       JSON.stringify({ previous: current.eligibility, next: eligibility }), now
     );
+    await enqueuePlayerSync(db, playerId);
     await db.execAsync("COMMIT;");
   } catch (error) {
     await db.execAsync("ROLLBACK;");
@@ -859,6 +896,11 @@ export async function saveTimeout(
   setNumber: number,
   team: "home" | "away"
 ): Promise<void> {
+  const used = await db.getFirstAsync<{ team: string }>(
+    "SELECT team FROM timeouts WHERE match_id = ? AND set_number = ? AND team = ?",
+    matchId, setNumber, team
+  );
+  if (used) throw new Error("Este equipo ya utilizó su tiempo muerto en este set.");
   const now = new Date().toISOString();
   try {
     await db.runAsync(

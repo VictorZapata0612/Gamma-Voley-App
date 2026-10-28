@@ -1,4 +1,4 @@
-import { router, useFocusEffect } from "expo-router";
+import { useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
@@ -6,6 +6,7 @@ import {
   getPendingSyncOperations,
   getSyncQueueStats,
   processSyncQueue,
+  type RemoteSyncProvider,
   type SyncQueueItem,
   type SyncResult,
 } from "@/services/sync";
@@ -13,6 +14,10 @@ import {
   generateOfficialTextReport,
   generateTournamentMemoryJson,
 } from "@/services/export";
+import { goBack } from "@/utils/navigation";
+
+// Set to the Supabase provider once the server schema and RLS are ready
+const REMOTE_PROVIDER: RemoteSyncProvider | null = null;
 
 export default function SyncScreen() {
   const db = useSQLiteContext();
@@ -40,10 +45,15 @@ export default function SyncScreen() {
   );
 
   async function handleSyncNow() {
+    // No real provider is wired yet; never report pending operations as synced
+    if (!REMOTE_PROVIDER) {
+      setError("La sincronización con el servidor todavía no está conectada. Los datos siguen guardados en este teléfono.");
+      return;
+    }
     setIsSyncing(true);
     setError(null);
     try {
-      const res = await processSyncQueue(db);
+      const res = await processSyncQueue(db, REMOTE_PROVIDER);
       setLastSyncResult(res);
       await loadData();
     } catch (err) {
@@ -67,7 +77,7 @@ export default function SyncScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => router.back()}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => goBack("/")}>
           <Text style={styles.back}>‹ Inicio</Text>
         </Pressable>
 

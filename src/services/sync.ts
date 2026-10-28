@@ -288,9 +288,10 @@ export async function requeueAndResetAllData(db: SQLiteDatabase): Promise<void> 
 /**
  * Procesa la cola offline de SQLite enviando cada elemento al servidor.
  */
+// The provider is required: a default mock would mark the queue as synced without sending anything
 export async function processSyncQueue(
   db: SQLiteDatabase,
-  provider: RemoteSyncProvider = MockRemoteProvider
+  provider: RemoteSyncProvider
 ): Promise<SyncResult> {
   const items = await getPendingSyncOperations(db);
   const result: SyncResult = {

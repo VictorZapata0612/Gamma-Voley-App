@@ -1,4 +1,4 @@
-import { router, useFocusEffect } from "expo-router";
+import { useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
@@ -13,6 +13,7 @@ import {
   generateOfficialTextReport,
   generateTournamentMemoryJson,
 } from "@/services/export";
+import { goBack } from "@/utils/navigation";
 
 export default function SyncScreen() {
   const db = useSQLiteContext();
@@ -67,7 +68,7 @@ export default function SyncScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => router.back()}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => goBack("/")}>
           <Text style={styles.back}>‹ Inicio</Text>
         </Pressable>
 

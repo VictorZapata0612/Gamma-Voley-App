@@ -232,7 +232,7 @@ export default function TeamDetailScreen() {
               <Text style={styles.compositionLabel}>👨 Hombres</Text>
             </View>
             <View style={styles.compositionPill}>
-              <Text style={styles.compositionNumber}>{players.length} / 12</Text>
+              <Text style={styles.compositionNumber}>{players.length}</Text>
               <Text style={styles.compositionLabel}>Total Nómina</Text>
             </View>
           </View>
@@ -252,14 +252,12 @@ export default function TeamDetailScreen() {
               {eligibleCount} elegibles · {pendingReviewCount} pendientes de revisión
             </Text>
           </View>
-          {players.length < 12 && (
-            <Pressable
-              onPress={() => router.push({ pathname: "/player-form", params: { teamId: team.id } })}
-              style={styles.addButton}
-            >
-              <Text style={styles.addButtonText}>+ Inscribir</Text>
-            </Pressable>
-          )}
+          <Pressable
+            onPress={() => router.push({ pathname: "/player-form", params: { teamId: team.id } })}
+            style={styles.addButton}
+          >
+            <Text style={styles.addButtonText}>+ Inscribir</Text>
+          </Pressable>
         </View>
 
         {players.length === 0 ? (

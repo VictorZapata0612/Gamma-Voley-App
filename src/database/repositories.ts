@@ -512,6 +512,13 @@ export async function saveTeamRecord(
     throw new Error("El nombre del equipo es obligatorio.");
   }
 
+  // Checked explicitly: on web, expo-sqlite reports constraint errors without "UNIQUE" in the message
+  const sameName = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM teams WHERE tournament_id = ? AND name = ? AND id <> ?",
+    team.tournamentId, team.name.trim(), team.id
+  );
+  if (sameName) throw new Error("Ya existe un equipo con ese nombre en este torneo.");
+
   const now = new Date().toISOString();
 
   await db.execAsync("BEGIN TRANSACTION;");
@@ -559,9 +566,6 @@ export async function saveTeamRecord(
     await db.execAsync("COMMIT;");
   } catch (error) {
     await db.execAsync("ROLLBACK;");
-    if (error instanceof Error && error.message.includes("UNIQUE")) {
-      throw new Error("Ya existe un equipo con ese nombre en este torneo.");
-    }
     throw error;
   }
 }
@@ -892,6 +896,11 @@ export async function saveTimeout(
   setNumber: number,
   team: "home" | "away"
 ): Promise<void> {
+  const used = await db.getFirstAsync<{ team: string }>(
+    "SELECT team FROM timeouts WHERE match_id = ? AND set_number = ? AND team = ?",
+    matchId, setNumber, team
+  );
+  if (used) throw new Error("Este equipo ya utilizó su tiempo muerto en este set.");
   const now = new Date().toISOString();
   try {
     await db.runAsync(

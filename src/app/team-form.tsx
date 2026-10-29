@@ -6,6 +6,7 @@ import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import { getTeamRecord, saveTeamRecord } from "@/database/repositories";
 import { goBack } from "@/utils/navigation";
+import { triggerImmediateSync } from "@/domain/liveScoring";
 
 export default function TeamFormScreen() {
   const db = useSQLiteContext();
@@ -42,6 +43,10 @@ export default function TeamFormScreen() {
         registrationStatus,
         paymentStatus,
       });
+
+      // Dispara la sincronización en segundo plano con Supabase tras guardar localmente
+      void triggerImmediateSync(db);
+
       goBack("/teams");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No se pudo guardar el equipo.");
@@ -119,7 +124,7 @@ export default function TeamFormScreen() {
         {error && <Text style={styles.error}>{error}</Text>}
 
         <Text style={styles.note}>
-          Al guardar, la información de pago y confirmación se actualizará inmediatamente en la base de datos local SQLite.
+          Al guardar, la información de pago y confirmación se actualizará inmediatamente en la base de datos local SQLite y se sincronizará con Supabase.
         </Text>
 
         <Pressable onPress={() => void submit()} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>

@@ -47,16 +47,21 @@ export default function StandingsScreen() {
     }, [load])
   );
 
-  const getRowsForGroup = (groupId: "A" | "B"): StandingRow[] => {
-    const groupTeams = teams
-      .filter((team) => team.groupId === groupId)
-      .map((team) => ({ id: team.id, name: team.name, groupId }));
-    const groupTeamIds = new Set(groupTeams.map((team) => team.id));
-    const groupResults = results.filter(
-      (result) => groupTeamIds.has(result.homeTeamId) && groupTeamIds.has(result.awayTeamId)
-    );
-    return calculateStandings(groupTeams, groupResults);
-  };
+const getRowsForGroup = (groupId: "A" | "B"): StandingRow[] => {
+  const groupTeams = teams
+    .filter((team: any) => (team.groupId ?? team.group_id) === groupId)
+    .map((team: any) => ({
+      id: team.id,
+      name: team.name,
+      groupId: team.groupId ?? team.group_id ?? groupId,
+    }));
+
+  const groupTeamIds = new Set(groupTeams.map((team) => team.id));
+  const groupResults = results.filter(
+    (result) => groupTeamIds.has(result.homeTeamId) && groupTeamIds.has(result.awayTeamId)
+  );
+  return calculateStandings(groupTeams, groupResults);
+};
 
   const rowsA = getRowsForGroup("A");
   const rowsB = getRowsForGroup("B");

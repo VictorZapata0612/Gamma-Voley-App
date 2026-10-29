@@ -1002,9 +1002,6 @@ export async function isGroupPhaseFinished(
   return (totalRow?.count ?? 0) > 0 && (pendingRow?.count ?? 0) === 0;
 }
 
-/**
-  Crea o actualiza los partidos oficiales de Semifinales en SQLite (sf-1 y sf-2).
- */
 export async function createKnockoutBracketMatches(
   db: SQLiteDatabase,
   tournamentId: string,
@@ -1026,6 +1023,20 @@ export async function createKnockoutBracketMatches(
     await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('sf-1', 1, 0, 0)");
     await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('sf-1', 2, 0, 0)");
 
+    // Encolar creación/actualización de SF-1 para Supabase
+    await enqueueSyncOperation(db, `sync-match-sf-1-${Date.now()}`, "match", "sf-1", "save_match", {
+      id: "sf-1",
+      tournamentId,
+      phase: "knockout",
+      homeTeamId: bracket.semifinal1.homeTeamId,
+      awayTeamId: bracket.semifinal1.awayTeamId,
+      courtNumber: 1,
+      status: "scheduled",
+      currentSet: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+
     // Semifinal 2: 1º Grupo B vs 2º Grupo A (Cancha 2)
     await db.runAsync(
       `INSERT INTO matches (id, tournament_id, phase, home_team_id, away_team_id, court_number, status, current_set, created_at, updated_at)
@@ -1036,6 +1047,20 @@ export async function createKnockoutBracketMatches(
     await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('sf-2', 1, 0, 0)");
     await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('sf-2', 2, 0, 0)");
 
+    // Encolar creación/actualización de SF-2 para Supabase
+    await enqueueSyncOperation(db, `sync-match-sf-2-${Date.now()}`, "match", "sf-2", "save_match", {
+      id: "sf-2",
+      tournamentId,
+      phase: "knockout",
+      homeTeamId: bracket.semifinal2.homeTeamId,
+      awayTeamId: bracket.semifinal2.awayTeamId,
+      courtNumber: 2,
+      status: "scheduled",
+      currentSet: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+
     await db.execAsync("COMMIT;");
   } catch (error) {
     await db.execAsync("ROLLBACK;");
@@ -1043,9 +1068,6 @@ export async function createKnockoutBracketMatches(
   }
 }
 
-/**
-  Verifica si ambas semifinales terminaron y crea el partido de la Gran Final con sus ganadores.
- */
 export async function unlockFinalMatchIfReady(
   db: SQLiteDatabase,
   tournamentId: string
@@ -1061,7 +1083,6 @@ export async function unlockFinalMatchIfReady(
   const sf1Done = sf1.status === "completed" || sf1.status === "walkover";
   const sf2Done = sf2.status === "completed" || sf2.status === "walkover";
 
-  // A final that has not started follows the semifinals; once it starts its teams are fixed
   if (!(sf1Done && sf2Done && sf1.winner && sf2.winner)) {
     await db.runAsync("DELETE FROM match_sets WHERE match_id = 'final' AND EXISTS (SELECT 1 FROM matches WHERE id = 'final' AND status = 'scheduled')");
     await db.runAsync("DELETE FROM matches WHERE id = 'final' AND status = 'scheduled'");
@@ -1078,12 +1099,26 @@ export async function unlockFinalMatchIfReady(
       await db.runAsync(
         `INSERT INTO matches (id, tournament_id, phase, home_team_id, away_team_id, court_number, status, current_set, created_at, updated_at)
          VALUES ('final', ?, 'knockout', ?, ?, 1, 'scheduled', 1, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET home_team_id = excluded.home_team_id, away_team_id = excluded.away_team_id, updated_at = excluded.updated_at
-         WHERE matches.status = 'scheduled'`,
+         ON CONFLICT(id) DO UPDATE SET home_team_id = excluded.home_team_id, away_team_id = excluded.away_team_id, updated_at = excluded.updated_at`,
         tournamentId, winner1Id, winner2Id, now, now
       );
       await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('final', 1, 0, 0)");
       await db.runAsync("INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points) VALUES ('final', 2, 0, 0)");
+
+      // Encolar creación/actualización de la Final para Supabase
+      await enqueueSyncOperation(db, `sync-match-final-${Date.now()}`, "match", "final", "save_match", {
+        id: "final",
+        tournamentId,
+        phase: "knockout",
+        homeTeamId: winner1Id,
+        awayTeamId: winner2Id,
+        courtNumber: 1,
+        status: "scheduled",
+        currentSet: 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+
       await db.execAsync("COMMIT;");
       return true;
     } catch (error) {

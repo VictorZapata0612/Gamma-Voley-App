@@ -114,33 +114,35 @@ export async function requeueAndResetAllData(db: SQLiteDatabase): Promise<void> 
   }
 
   // 3. Re-encolar Equipos
-  const teams = await db.getAllAsync<{
-    id: string;
-    tournament_id: string;
-    name: string;
-    captain_name: string | null;
-    contact: string | null;
-    registration_status: string;
-    payment_status: string;
-  }>("SELECT * FROM teams");
-  for (const team of teams) {
-    await db.runAsync(
-      `INSERT OR REPLACE INTO sync_queue (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
-       VALUES (?, 'team', ?, 'save_team', ?, 'pending', 0, NULL, ?, ?)`,
-      `requeue-team-${team.id}`,
-      team.id,
-      JSON.stringify({
-        tournamentId: team.tournament_id,
-        name: team.name,
-        captainName: team.captain_name,
-        contact: team.contact,
-        registrationStatus: team.registration_status,
-        paymentStatus: team.payment_status,
-      }),
-      now,
-      now
-    );
-  }
+const teams = await db.getAllAsync<{
+  id: string;
+  tournament_id: string;
+  group_id: string | null;
+  name: string;
+  captain_name: string | null;
+  contact: string | null;
+  registration_status: string;
+  payment_status: string;
+}>("SELECT * FROM teams");
+for (const team of teams) {
+  await db.runAsync(
+    `INSERT OR REPLACE INTO sync_queue (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+     VALUES (?, 'team', ?, 'save_team', ?, 'pending', 0, NULL, ?, ?)`,
+    `requeue-team-${team.id}`,
+    team.id,
+    JSON.stringify({
+      tournamentId: team.tournament_id,
+      groupId: team.group_id, // <-- SE AGREGA EL GRUPO
+      name: team.name,
+      captainName: team.captain_name,
+      contact: team.contact,
+      registrationStatus: team.registration_status,
+      paymentStatus: team.payment_status,
+    }),
+    now,
+    now
+  );
+}
 
   // 4. Re-encolar Jugadores
   const players = await db.getAllAsync<{

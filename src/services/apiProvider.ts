@@ -401,31 +401,33 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
       }
 
       // Equipo
-      if (item.entityType === "team" || item.operation === "save_team") {
-        const tournamentId = requiredString(
-          payload.tournamentId ?? payload.tournament_id ?? "gamma-voley-2026",
-          "team.tournamentId",
-        );
+// Equipo
+if (item.entityType === "team" || item.operation === "save_team") {
+  const tournamentId = requiredString(
+    payload.tournamentId ?? payload.tournament_id ?? "gamma-voley-2026",
+    "team.tournamentId"
+  );
 
-        await this.ensureTournamentExists(tournamentId);
+  await this.ensureTournamentExists(tournamentId);
 
-        await this.upsert("teams", {
-          id: requiredString(payload.id ?? item.entityId, "team.id"),
-          tournament_id: tournamentId,
-          name: requiredString(payload.name, "team.name"),
-          captain_name: payload.captainName ?? payload.captain_name ?? null,
-          contact: payload.contact ?? null,
-          registration_status:
-            payload.registrationStatus ??
-            payload.registration_status ??
-            "pending",
-          payment_status:
-            payload.paymentStatus ?? payload.payment_status ?? "pending",
-          created_at: payload.createdAt ?? payload.created_at,
-          updated_at: payload.updatedAt ?? payload.updated_at ?? item.updatedAt,
-        });
-        return { success: true };
-      }
+  await this.upsert("teams", {
+    id: requiredString(payload.id ?? item.entityId, "team.id"),
+    tournament_id: tournamentId,
+    group_id: payload.groupId ?? payload.group_id ?? null, // <-- SE AGREGA EL GRUPO
+    name: requiredString(payload.name, "team.name"),
+    captain_name: payload.captainName ?? payload.captain_name ?? null,
+    contact: payload.contact ?? null,
+    registration_status:
+      payload.registrationStatus ??
+      payload.registration_status ??
+      "pending",
+    payment_status:
+      payload.paymentStatus ?? payload.payment_status ?? "pending",
+    created_at: payload.createdAt ?? payload.created_at,
+    updated_at: payload.updatedAt ?? payload.updated_at ?? item.updatedAt,
+  });
+  return { success: true };
+}
 
       // Jugador
       if (item.entityType === "player" || item.operation === "save_player") {

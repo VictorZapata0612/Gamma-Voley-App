@@ -27,6 +27,10 @@ export interface RemoteSyncProvider {
   pushOperation(item: SyncQueueItem): Promise<{ success: boolean; error?: string }>;
 }
 
+function isPermanentSyncRejection(message: string): boolean {
+  return /SET_NOT_ACTIVE|SET_CLOSED|GROUP_SET_LIMIT_REACHED|set (ya está cerrado|dejó de ser el set activo)|tope estricto|no pueden superar 15|no puede superar 15|active set|closed set/i.test(message);
+}
+
 /**
  * Mock provider por defecto cuando se opera sin red remota o en desarrollo local.
  */
@@ -348,10 +352,12 @@ export async function processSyncQueue(
         result.successCount++;
       } else {
         const errorMsg = response.error ?? "Error desconocido en el servidor remoto.";
+        const status = isPermanentSyncRejection(errorMsg) ? "conflict" : "error";
         await db.runAsync(
           `UPDATE sync_queue
-           SET status = 'error', attempts = attempts + 1, last_error = ?, updated_at = ?
+           SET status = ?, attempts = attempts + 1, last_error = ?, updated_at = ?
            WHERE operation_id = ?`,
+          status,
           errorMsg,
           now,
           item.operationId
@@ -361,10 +367,12 @@ export async function processSyncQueue(
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Error grave de conexión.";
+      const status = isPermanentSyncRejection(errorMsg) ? "conflict" : "error";
       await db.runAsync(
         `UPDATE sync_queue
-         SET status = 'error', attempts = attempts + 1, last_error = ?, updated_at = ?
+         SET status = ?, attempts = attempts + 1, last_error = ?, updated_at = ?
          WHERE operation_id = ?`,
+        status,
         errorMsg,
         now,
         item.operationId

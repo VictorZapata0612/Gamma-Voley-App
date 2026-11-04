@@ -11,6 +11,7 @@ import {
   type ScoreEventRecord,
 } from "@/database/repositories";
 import { triggerImmediateSync } from "@/domain/liveScoring";
+import { isSetClosed } from "@/domain/rules";
 import { useMatchRealtime } from "@/hooks/useMatchRealtime";
 import type { MatchRealtimeStatus } from "@/services/realtime";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
@@ -128,6 +129,7 @@ export default function LiveScoreScreen() {
       setError("Escribe el motivo de la corrección antes de restar un punto.");
       return;
     }
+
     try {
       const action = {
         id: `score-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -151,6 +153,12 @@ export default function LiveScoreScreen() {
       setError(err instanceof Error ? err.message : "Error al registrar el punto.");
     }
   }
+
+  const activeSet = match?.sets[(match.currentSet ?? 1) - 1];
+  const activeSetClosed = match && activeSet
+    ? isSetClosed(match.phase, activeSet, match.currentSet, match.sets.slice(0, match.currentSet - 1))
+    : true;
+  const canAddPoint = Boolean(match && match.status !== "completed" && match.status !== "walkover" && !activeSetClosed);
 
   async function timeout(team: "home" | "away") {
     if (!match) return;
@@ -261,6 +269,7 @@ export default function LiveScoreScreen() {
                 <View style={styles.controlsRow}>
                   <Pressable
                     onPress={() => void change("home", 1)}
+                    disabled={!canAddPoint}
                     style={({ pressed }) => [styles.scoreBtn, styles.scoreBtnPlus, pressed && styles.pressed]}
                   >
                     <Text style={styles.scoreBtnText}>+1</Text>
@@ -286,6 +295,7 @@ export default function LiveScoreScreen() {
                 <View style={styles.controlsRow}>
                   <Pressable
                     onPress={() => void change("away", 1)}
+                    disabled={!canAddPoint}
                     style={({ pressed }) => [styles.scoreBtn, styles.scoreBtnPlus, pressed && styles.pressed]}
                   >
                     <Text style={styles.scoreBtnText}>+1</Text>

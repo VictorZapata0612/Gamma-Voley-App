@@ -38,6 +38,12 @@ Las pantallas de grupos, calendario y clasificación mantienen una suscripción
 Realtime al torneo mientras están abiertas y vuelven a cargar sus datos cuando
 cambia una asignación, partido, set, resultado o tiempo muerto.
 
+La validación atómica de puntos de los sets 1 y 2 de grupos está en
+[`supabase/migrations/20261104170000_harden_apply_score_event.sql`](./supabase/migrations/20261104170000_harden_apply_score_event.sql).
+Ejecuta ese archivo en Supabase Dashboard > SQL Editor antes de probar dos
+dispositivos. Una acción rechazada por set cerrado, set inactivo o límite de
+15 puntos queda como conflicto local y no se reintenta indefinidamente.
+
 Si una pestaña anterior muestra `Invalid VFS state`,
 `createSyncAccessHandle` o `Error finalizing statement`, cierra las pestañas
 anteriores y ejecuta `npx expo start --web --clear`.

@@ -268,6 +268,31 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
     if (isCorrection) {
       // Las correcciones administrativas conservan su flujo actual.
       await this.ensureMatchExists(matchId);
+      const { data: remoteMatch, error: remoteMatchError } = await supabase
+        .from("matches")
+        .select("phase")
+        .eq("id", matchId)
+        .single();
+      throwIfError(remoteMatchError);
+      const score = payload.score;
+      const homePoints =
+        payload.homePoints ??
+        payload.home_points ??
+        (score && typeof score === "object" ? score.home : undefined);
+      const awayPoints =
+        payload.awayPoints ??
+        payload.away_points ??
+        (score && typeof score === "object" ? score.away : undefined);
+      if (
+        remoteMatch?.phase === "group" &&
+        setNumber <= 2 &&
+        Math.max(
+          requiredNumber(homePoints, "score.home"),
+          requiredNumber(awayPoints, "score.away"),
+        ) > 15
+      ) {
+        throw new Error("Los sets 1 y 2 de grupos no pueden superar 15 puntos.");
+      }
 
       await this.upsert("score_events", {
         id: eventId,
@@ -543,6 +568,27 @@ if (item.entityType === "team" || item.operation === "save_team") {
           "matchId",
         );
         await this.ensureMatchExists(matchId);
+        const { data: match, error: matchError } = await supabase
+          .from("matches")
+          .select("phase")
+          .eq("id", matchId)
+          .single();
+        throwIfError(matchError);
+        const homePoints = requiredNumber(
+          payload.homePoints ?? payload.home_points,
+          "homePoints",
+        );
+        const awayPoints = requiredNumber(
+          payload.awayPoints ?? payload.away_points,
+          "awayPoints",
+        );
+        if (
+          match?.phase === "group" &&
+          Number(payload.setNumber ?? payload.set_number) <= 2 &&
+          Math.max(homePoints, awayPoints) > 15
+        ) {
+          throw new Error("Los sets 1 y 2 de grupos no pueden superar 15 puntos.");
+        }
 
         await this.upsert(
           "match_sets",
@@ -552,14 +598,8 @@ if (item.entityType === "team" || item.operation === "save_team") {
               payload.setNumber ?? payload.set_number,
               "setNumber",
             ),
-            home_points: requiredNumber(
-              payload.homePoints ?? payload.home_points,
-              "homePoints",
-            ),
-            away_points: requiredNumber(
-              payload.awayPoints ?? payload.away_points,
-              "awayPoints",
-            ),
+            home_points: homePoints,
+            away_points: awayPoints,
             closed_at: payload.closedAt ?? payload.closed_at ?? null,
           },
           "match_id,set_number",

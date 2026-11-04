@@ -2,7 +2,7 @@ import type { SQLiteDatabase } from "expo-sqlite";
 import type { GroupId, Match, MatchResult, ScoreAction, SemifinalBracket, SetScore, Team, TimeoutState } from "@/domain/types";import type { Player } from "@/domain/eligibility";
 import type { ScheduledGroupMatch } from "@/domain/schedule";
 import { deriveMatchProgress, type MatchProgress } from "@/domain/liveScoring";
-import { getTimeoutSetNumber } from "@/domain/rules";
+import { getTimeoutSetNumber, isSetClosed } from "@/domain/rules";
 import { walkoverSets } from "@/domain/walkover";
 
 type TeamRow = {
@@ -233,8 +233,14 @@ export async function recordLiveScoreAction(db: SQLiteDatabase, matchId: string,
     const setNumber = match.currentSet;
     const current = match.sets[setNumber - 1];
     if (!current) throw new Error("El set actual no está inicializado.");
+    if (setNumber !== match.currentSet || isSetClosed(match.phase, current, setNumber, match.sets.slice(0, setNumber - 1))) {
+      throw new Error("El set ya está cerrado o dejó de ser el set activo.");
+    }
     const next = { ...current, [action.team]: current[action.team] + action.delta };
     if (next.home < 0 || next.away < 0) throw new Error("El marcador no puede ser negativo.");
+    if (match.phase === "group" && setNumber <= 2 && Math.max(next.home, next.away) > 15) {
+      throw new Error("Los sets 1 y 2 de grupos tienen un tope estricto de 15 puntos.");
+    }
     const now = new Date().toISOString();
     await db.runAsync("INSERT INTO score_events (id, match_id, set_number, team, delta, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", action.id, matchId, setNumber, action.team, action.delta, action.reason ?? null, now);
     const column = action.team === "home" ? "home_points" : "away_points";
@@ -319,6 +325,9 @@ export async function recordAdministrativeCorrection(db: SQLiteDatabase, matchId
     if (!current) throw new Error(`El set ${setNumber} no existe o no está inicializado.`);
     const next = { ...current, [action.team]: current[action.team] + action.delta };
     if (next.home < 0 || next.away < 0) throw new Error("La corrección no puede dejar el marcador negativo.");
+    if (match.phase === "group" && setNumber <= 2 && Math.max(next.home, next.away) > 15) {
+      throw new Error("Los sets 1 y 2 de grupos tienen un tope estricto de 15 puntos.");
+    }
     const now = new Date().toISOString();
     await db.runAsync("INSERT INTO score_events (id, match_id, set_number, team, delta, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", action.id, matchId, setNumber, action.team, action.delta, action.reason, now);
     const column = action.team === "home" ? "home_points" : "away_points";

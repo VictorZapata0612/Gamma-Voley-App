@@ -3,6 +3,7 @@ import { supabase } from "./supabase";
 
 type RemoteMatch = {
   id: string;
+  phase: "group" | "knockout";
   status: string;
   winner: string | null;
   current_set: number;
@@ -99,7 +100,7 @@ export async function reconcileRemoteMatch(
   matchId: string,
 ): Promise<void> {
   const [matchResult, setsResult, eventsResult, timeoutsResult] = await Promise.all([
-    supabase.from("matches").select("id, status, winner, current_set, updated_at").eq("id", matchId).maybeSingle(),
+    supabase.from("matches").select("id, phase, status, winner, current_set, updated_at").eq("id", matchId).maybeSingle(),
     supabase.from("match_sets").select("match_id, set_number, home_points, away_points, closed_at").eq("match_id", matchId),
     supabase.from("score_events").select("id, match_id, set_number, team, delta, reason, created_at").eq("match_id", matchId),
     supabase.from("timeouts").select("match_id, set_number, team, used_at").eq("match_id", matchId),
@@ -113,6 +114,12 @@ export async function reconcileRemoteMatch(
   const sets = (setsResult.data ?? []) as RemoteSet[];
   const events = (eventsResult.data ?? []) as RemoteScoreEvent[];
   const timeouts = (timeoutsResult.data ?? []) as RemoteTimeout[];
+  if (
+    matchResult.data?.phase === "group" &&
+    sets.some((set) => set.set_number <= 2 && (set.home_points > 15 || set.away_points > 15))
+  ) {
+    throw new Error("Supabase devolvió un set de grupos superior al límite estricto de 15.");
+  }
   const preserveLocalChanges = await hasPendingMatchChanges(db, matchId);
 
   await db.execAsync("BEGIN TRANSACTION;");

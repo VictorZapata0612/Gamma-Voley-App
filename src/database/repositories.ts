@@ -93,6 +93,19 @@ export async function assignTeamToGroup(db: SQLiteDatabase, tournamentId: string
   const resolved = group ?? { id: `group-${groupId.toLowerCase()}` };
   await db.runAsync("DELETE FROM group_memberships WHERE team_id = ?", teamId);
   await db.runAsync("INSERT INTO group_memberships (group_id, team_id) VALUES (?, ?)", resolved.id, teamId);
+  await enqueueSyncOperation(
+    db,
+    `sync-group-membership-${teamId}-${Date.now()}`,
+    "group_membership",
+    teamId,
+    "save_group_membership",
+    {
+      tournamentId,
+      teamId,
+      groupId: resolved.id,
+      groupName: groupId,
+    }
+  );
 }
 
 export async function saveScheduledGroupMatches(
@@ -1190,7 +1203,7 @@ export async function getTournamentChampion(
   db: SQLiteDatabase,
   tournamentId: string
 ): Promise<TeamRecord | null> {
-  const finalMatch = await db.getFirstAsync<{
+  const finalMatch = (await db.getAllAsync<{
     status: string;
     winner: "home" | "away" | null;
     home_team_id: string;
@@ -1198,7 +1211,7 @@ export async function getTournamentChampion(
   }>(
     "SELECT status, winner, home_team_id, away_team_id FROM matches WHERE id = 'final' AND tournament_id = ?",
     tournamentId
-  );
+  ))[0] ?? null;
 
   if (!finalMatch || (finalMatch.status !== "completed" && finalMatch.status !== "walkover") || !finalMatch.winner) {
     return null;

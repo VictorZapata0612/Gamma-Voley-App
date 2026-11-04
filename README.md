@@ -6,11 +6,38 @@ Aplicación móvil para gestionar el Torneo Mixto Gamma Voley 2026 (14 y 15 de n
 
 ```bash
 npm ci
-npx expo start        # abrir con Expo Go en Android
+npx expo start        # abrir con Expo Go compatible con SDK 58
 npm run test:domain   # pruebas de reglas (vitest)
 npx tsc --noEmit      # verificación de tipos
 npm run lint
 ```
+
+`expo-sqlite` está incluido en Expo Go para SDK 58, pero el binario del teléfono
+debe usar el mismo SDK que el proyecto. Si Expo Go muestra `Cannot find native
+module 'ExpoSQLite'`, actualiza Expo Go a una versión compatible con SDK 58 o
+abre el proyecto con un development build; no es un error de las tablas SQLite.
+
+Después de actualizar dependencias, reinicia Metro limpiando su caché. Para
+probar en un teléfono, usa el QR de esta única sesión LAN:
+
+```bash
+npx expo start --lan --clear
+```
+
+Si aparece un mensaje de que el puerto 8081 está ocupado, cierra la sesión
+anterior y vuelve a ejecutar el comando. No escanees un QR de otra sesión o de
+otro puerto.
+
+La versión web usa el WebAssembly incluido por `expo-sqlite`, los encabezados
+COEP/COOP requeridos y una base SQLite en memoria (`:memory:`), evitando los
+bloqueos de OPFS del navegador. La web vuelve a hidratar el torneo desde
+Supabase al abrirse; el almacenamiento persistente queda reservado para móvil.
+La cola automática de escritura offline solo se ejecuta en móvil, donde existe
+persistencia local; la web carga los datos públicos directamente desde Supabase.
+
+Si una pestaña anterior muestra `Invalid VFS state`,
+`createSyncAccessHandle` o `Error finalizing statement`, cierra las pestañas
+anteriores y ejecuta `npx expo start --web --clear`.
 
 ## Estructura
 

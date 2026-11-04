@@ -20,7 +20,11 @@ function AppContent() {
 
 export default function RootLayout() {
   return (
-    <SQLiteProvider databaseName="gamma-voley.db" onInit={initializeDatabase}>
+    <SQLiteProvider
+      databaseName={process.env.EXPO_OS === "web" ? ":memory:" : "gamma-voley.db"}
+      onInit={initializeDatabase}
+      useSuspense
+    >
       <AppContent />
     </SQLiteProvider>
   );

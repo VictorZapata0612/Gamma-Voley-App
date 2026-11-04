@@ -11,6 +11,9 @@ import {
   type ScoreEventRecord,
 } from "@/database/repositories";
 import { triggerImmediateSync } from "@/domain/liveScoring";
+import { useMatchRealtime } from "@/hooks/useMatchRealtime";
+import type { MatchRealtimeStatus } from "@/services/realtime";
+import { hydrateDefaultTournament } from "@/services/initialHydration";
 
 /**
  * Alarma de silbato/chicharra y vibración multitono al finalizar los 30s.
@@ -58,6 +61,7 @@ export default function LiveScoreScreen() {
   const [correctionMode, setCorrectionMode] = useState(false);
   const [reason, setReason] = useState("");
   const [showHistory, setShowHistory] = useState(false);
+  const [realtimeStatus, setRealtimeStatus] = useState<MatchRealtimeStatus>("CONNECTING");
 
   // Estados del Temporizador de Tiempo Muerto (30 segundos)
   const [timeoutSeconds, setTimeoutSeconds] = useState<number | null>(null);
@@ -69,12 +73,31 @@ export default function LiveScoreScreen() {
       return;
     }
     try {
+      await hydrateDefaultTournament(db);
       const data = await getLiveMatch(db, matchId);
       setMatch(data);
-    } catch {
-      setError("No se pudo cargar el marcador oficial desde SQLite.");
+      setError(null);
+      if (!data) {
+        setError("No se encontró el partido en el torneo sincronizado.");
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo cargar el marcador oficial.");
     }
   }, [db, matchId]);
+
+  const handleRealtimeUpdate = useCallback(() => {
+    void load();
+  }, [load]);
+
+  const handleRealtimeError = useCallback((realtimeError: Error) => {
+    setError(realtimeError.message);
+  }, []);
+
+  const handleRealtimeStatus = useCallback((status: MatchRealtimeStatus) => {
+    setRealtimeStatus(status);
+  }, []);
+
+  useMatchRealtime(db, matchId, handleRealtimeUpdate, handleRealtimeError, handleRealtimeStatus);
 
   useEffect(() => {
     // Ejecutar la carga de forma asíncrona evita actualizar el estado durante
@@ -182,6 +205,11 @@ export default function LiveScoreScreen() {
             <Text style={styles.statusText}>{match.status.toUpperCase()}</Text>
           </View>
         </View>
+        <Text style={realtimeStatus === "SUBSCRIBED" ? styles.realtimeConnected : styles.realtimeDisconnected}>
+          {realtimeStatus === "SUBSCRIBED"
+            ? "● Marcador conectado en tiempo real"
+            : `○ Tiempo real: ${realtimeStatus.toLowerCase()}. Se reintentará al recuperar la conexión.`}
+        </Text>
 
         {/* Modal / Tarjeta Flotante del Temporizador de Tiempo Muerto (30s) */}
         {timeoutSeconds !== null && (
@@ -403,6 +431,8 @@ const styles = StyleSheet.create({
   matchTitle: { color: "#FFF", fontSize: 18, fontWeight: "900", marginTop: 2 },
   statusBadge: { backgroundColor: "#2B2D35", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
   statusText: { color: "#81C784", fontSize: 10, fontWeight: "900" },
+  realtimeConnected: { color: "#81C784", fontSize: 11, marginBottom: 12 },
+  realtimeDisconnected: { color: "#FFB74D", fontSize: 11, marginBottom: 12 },
 
   timeoutTimerCard: {
     backgroundColor: "#2B1A12",

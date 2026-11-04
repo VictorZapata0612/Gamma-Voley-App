@@ -1,11 +1,50 @@
-import { router } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import { assignTeamToGroup, listGroupTeams, type GroupTeamRecord, saveScheduledGroupMatches } from "@/database/repositories";
 import { createRoundRobinSchedule, validateGroupAssignments } from "@/domain/schedule";
 import { goBack } from "@/utils/navigation";
+import { hydrateDefaultTournament } from "@/services/initialHydration";
+import { supabase } from "@/services/supabase";
+
+async function loadRemoteGroupTeams(): Promise<GroupTeamRecord[]> {
+  const [teamsResult, groupsResult, membershipsResult] = await Promise.all([
+    supabase
+      .from("teams")
+      .select("id, name")
+      .eq("tournament_id", DEFAULT_TOURNAMENT_ID)
+      .order("name"),
+    supabase
+      .from("groups")
+      .select("id, name")
+      .eq("tournament_id", DEFAULT_TOURNAMENT_ID),
+    supabase
+      .from("group_memberships")
+      .select("team_id, group_id"),
+  ]);
+
+  if (teamsResult.error) throw new Error(teamsResult.error.message);
+  if (groupsResult.error) throw new Error(groupsResult.error.message);
+  if (membershipsResult.error) throw new Error(membershipsResult.error.message);
+
+  const groupNames = new Map(
+    (groupsResult.data ?? []).map((group) => [group.id, group.name as "A" | "B"])
+  );
+  const teamGroups = new Map(
+    (membershipsResult.data ?? []).map((membership) => [
+      membership.team_id,
+      groupNames.get(membership.group_id) ?? null,
+    ])
+  );
+
+  return (teamsResult.data ?? []).map((team) => ({
+    id: team.id,
+    name: team.name,
+    groupId: teamGroups.get(team.id) ?? null,
+  }));
+}
 
 export default function GroupsScreen() {
   const db = useSQLiteContext();
@@ -14,16 +53,24 @@ export default function GroupsScreen() {
 
   const load = useCallback(async () => {
     try {
+      if (process.env.EXPO_OS === "web") {
+        setTeams(await loadRemoteGroupTeams());
+        setMessage(null);
+        return;
+      }
+      await hydrateDefaultTournament(db);
       setTeams(await listGroupTeams(db, DEFAULT_TOURNAMENT_ID));
-    } catch {
-      // Ignorar error si la base aún no carga
+      setMessage(null);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "No se pudieron cargar los grupos.");
     }
   }, [db]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
   const validationTeams = teams.map((team) => ({
     id: team.id,

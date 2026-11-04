@@ -5,6 +5,38 @@ import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import { goBack } from "@/utils/navigation";
 import { listTeamRecords, type TeamRecord } from "@/database/repositories";
+import { hydrateDefaultTournament } from "@/services/initialHydration";
+import { supabase } from "@/services/supabase";
+
+type RemoteTeam = {
+  id: string;
+  tournament_id: string;
+  name: string;
+  captain_name: string | null;
+  contact: string | null;
+  registration_status: TeamRecord["registrationStatus"];
+  payment_status: TeamRecord["paymentStatus"];
+};
+
+async function loadWebTeams(): Promise<TeamRecord[]> {
+  const { data, error } = await supabase
+    .from("teams")
+    .select("id, tournament_id, name, captain_name, contact, registration_status, payment_status")
+    .eq("tournament_id", DEFAULT_TOURNAMENT_ID)
+    .order("name");
+
+  if (error) throw new Error(error.message);
+
+  return ((data ?? []) as RemoteTeam[]).map((team) => ({
+    id: team.id,
+    name: team.name,
+    tournamentId: team.tournament_id,
+    captainName: team.captain_name,
+    contact: team.contact,
+    registrationStatus: team.registration_status,
+    paymentStatus: team.payment_status,
+  }));
+}
 
 export default function TeamsScreen() {
   const db = useSQLiteContext();
@@ -13,10 +45,24 @@ export default function TeamsScreen() {
 
   const load = useCallback(async () => {
     try {
-      setTeams(await listTeamRecords(db, DEFAULT_TOURNAMENT_ID));
+      if (process.env.EXPO_OS === "web") {
+        try {
+          await hydrateDefaultTournament(db);
+        } catch {
+          setTeams(await loadWebTeams());
+          setError(null);
+          return;
+        }
+      }
+      const localTeams = await listTeamRecords(db, DEFAULT_TOURNAMENT_ID);
+      setTeams(
+        process.env.EXPO_OS === "web" && localTeams.length === 0
+          ? await loadWebTeams()
+          : localTeams
+      );
       setError(null);
-    } catch {
-      setError("No se pudieron cargar los equipos desde la base de datos.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudieron cargar los equipos desde la base de datos.");
     }
   }, [db]);
 

@@ -10,6 +10,7 @@ import {
   type KnockoutMatchRecord,
 } from "@/database/repositories";
 import { goBack } from "@/utils/navigation";
+import { hydrateDefaultTournament } from "@/services/initialHydration";
 
 export default function CalendarScreen() {
   const db = useSQLiteContext();
@@ -20,11 +21,12 @@ export default function CalendarScreen() {
 
   const load = useCallback(async () => {
     try {
+      await hydrateDefaultTournament(db);
       setGroupMatches(await listCalendarMatches(db, DEFAULT_TOURNAMENT_ID));
       setKnockoutMatches(await listKnockoutMatches(db, DEFAULT_TOURNAMENT_ID));
       setError(null);
-    } catch {
-      setError("No se pudo cargar el calendario desde SQLite.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo cargar el calendario.");
     }
   }, [db]);
 

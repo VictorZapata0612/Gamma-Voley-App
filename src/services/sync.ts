@@ -144,7 +144,36 @@ for (const team of teams) {
   );
 }
 
-  // 4. Re-encolar Jugadores
+// 4. Re-encolar asignaciones de grupo
+const memberships = await db.getAllAsync<{
+  team_id: string;
+  group_id: string;
+  group_name: "A" | "B";
+  tournament_id: string;
+}>(
+  `SELECT gm.team_id, gm.group_id, g.name AS group_name, g.tournament_id
+   FROM group_memberships gm
+   JOIN groups g ON g.id = gm.group_id`
+);
+for (const membership of memberships) {
+  await db.runAsync(
+    `INSERT OR REPLACE INTO sync_queue
+     (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+     VALUES (?, 'group_membership', ?, 'save_group_membership', ?, 'pending', 0, NULL, ?, ?)`,
+    `requeue-group-membership-${membership.team_id}`,
+    membership.team_id,
+    JSON.stringify({
+      tournamentId: membership.tournament_id,
+      teamId: membership.team_id,
+      groupId: membership.group_id,
+      groupName: membership.group_name,
+    }),
+    now,
+    now
+  );
+}
+
+// 5. Re-encolar Jugadores
   const players = await db.getAllAsync<{
     id: string;
     team_id: string;

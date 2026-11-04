@@ -429,6 +429,47 @@ if (item.entityType === "team" || item.operation === "save_team") {
   return { success: true };
 }
 
+      // Asignación de equipo a grupo
+      if (
+ item.entityType === "group_membership" ||
+ item.operation === "save_group_membership"
+      ) {
+ const tournamentId = requiredString(
+   payload.tournamentId ?? payload.tournament_id,
+   "groupMembership.tournamentId",
+ );
+ const teamId = requiredString(
+   payload.teamId ?? payload.team_id ?? item.entityId,
+   "groupMembership.teamId",
+ );
+ const groupId = requiredString(
+   payload.groupId ?? payload.group_id,
+   "groupMembership.groupId",
+ );
+ const groupName = payload.groupName ?? payload.group_name;
+ if (groupName !== "A" && groupName !== "B") {
+   throw new Error("groupMembership.groupName debe ser A o B.");
+ }
+
+ await this.ensureTournamentExists(tournamentId);
+ await this.ensureTeamExists(teamId);
+ await this.upsert("groups", {
+   id: groupId,
+   tournament_id: tournamentId,
+   name: groupName,
+ }, "id");
+ const { error: deleteError } = await supabase
+   .from("group_memberships")
+   .delete()
+   .eq("team_id", teamId);
+ throwIfError(deleteError);
+ await this.upsert("group_memberships", {
+   group_id: groupId,
+   team_id: teamId,
+ }, "group_id,team_id");
+ return { success: true };
+      }
+
       // Jugador
       if (item.entityType === "player" || item.operation === "save_player") {
         const teamId = requiredString(

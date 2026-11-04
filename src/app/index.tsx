@@ -1,10 +1,12 @@
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import { getTournamentChampion, type TeamRecord } from "@/database/repositories";
+import { hydrateDefaultTournament } from "@/services/initialHydration";
+import { supabase } from "@/services/supabase";
 
 type ActiveMatchInfo = {
   id: string;
@@ -27,6 +29,27 @@ type DashboardData = {
   champion: TeamRecord | null;
 };
 
+async function loadWebDashboard(): Promise<DashboardData> {
+  const [teamsResult, matchesResult] = await Promise.all([
+    supabase.from("teams").select("id", { count: "exact", head: true }).eq("tournament_id", DEFAULT_TOURNAMENT_ID),
+    supabase.from("matches").select("id, status, current_set").eq("tournament_id", DEFAULT_TOURNAMENT_ID),
+  ]);
+  if (teamsResult.error) throw new Error(teamsResult.error.message);
+  if (matchesResult.error) throw new Error(matchesResult.error.message);
+
+  const matches = matchesResult.data ?? [];
+  return {
+    teamsCount: teamsResult.count ?? 0,
+    scheduledCount: matches.filter((match) => match.status === "scheduled").length,
+    inProgressCount: matches.filter((match) => match.status === "in_progress").length,
+    completedCount: matches.filter((match) => match.status === "completed" || match.status === "walkover").length,
+    activeMatches: [],
+    hasMatches: matches.length > 0,
+    pendingSyncCount: 0,
+    champion: null,
+  };
+}
+
 export default function HomeScreen() {
   const db = useSQLiteContext();
   const [data, setData] = useState<DashboardData>({
@@ -41,15 +64,20 @@ export default function HomeScreen() {
   });
 
   const [activeTab, setActiveTab] = useState<"hub" | "rules">("hub");
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError(null);
     try {
-      const teamsRow = await db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM teams");
-      const schedRow = await db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM matches WHERE status = 'scheduled'");
-      const inProgRow = await db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM matches WHERE status = 'in_progress'");
-      const compRow = await db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM matches WHERE status IN ('completed', 'walkover')");
-      const firstMatch = await db.getFirstAsync<{ id: string }>("SELECT id FROM matches LIMIT 1");
-      const syncRow = await db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM sync_queue WHERE status = 'pending'");
+      await hydrateDefaultTournament(db);
+      const teamsRow = (await db.getAllAsync<{ count: number }>("SELECT COUNT(*) AS count FROM teams"))[0];
+      const schedRow = (await db.getAllAsync<{ count: number }>("SELECT COUNT(*) AS count FROM matches WHERE status = 'scheduled'"))[0];
+      const inProgRow = (await db.getAllAsync<{ count: number }>("SELECT COUNT(*) AS count FROM matches WHERE status = 'in_progress'"))[0];
+      const compRow = (await db.getAllAsync<{ count: number }>("SELECT COUNT(*) AS count FROM matches WHERE status IN ('completed', 'walkover')"))[0];
+      const firstMatch = (await db.getAllAsync<{ id: string }>("SELECT id FROM matches LIMIT 1"))[0];
+      const syncRow = (await db.getAllAsync<{ count: number }>("SELECT COUNT(*) AS count FROM sync_queue WHERE status = 'pending'"))[0];
       const champ = await getTournamentChampion(db, DEFAULT_TOURNAMENT_ID);
 
       // Obtener detalles de TODOS los partidos en curso (Cancha 1 y Cancha 2 simultáneos)
@@ -97,8 +125,19 @@ export default function HomeScreen() {
         pendingSyncCount: syncRow?.count ?? 0,
         champion: champ,
       });
-    } catch {
-      // Si la base no está lista todavía
+    } catch (error) {
+      if (process.env.EXPO_OS === "web") {
+        try {
+          setData(await loadWebDashboard());
+          setLoadError(null);
+        } catch (webError) {
+          setLoadError(webError instanceof Error ? webError.message : "No se pudo cargar el torneo desde Supabase.");
+        }
+      } else {
+        setLoadError(error instanceof Error ? error.message : "No se pudo cargar el torneo desde Supabase.");
+      }
+    } finally {
+      setIsLoading(false);
     }
   }, [db]);
 
@@ -111,6 +150,20 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
+        {isLoading && (
+          <View style={styles.loadBanner}>
+            <ActivityIndicator color="#FFFFFF" size="small" />
+            <Text style={styles.loadText}>Cargando torneo desde Supabase...</Text>
+          </View>
+        )}
+        {loadError && (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorBannerText}>{loadError}</Text>
+            <Pressable onPress={() => void loadData()} style={styles.retryButton}>
+              <Text style={styles.retryButtonText}>Reintentar</Text>
+            </Pressable>
+          </View>
+        )}
         {/* Cabecera Deportiva */}
         <View style={styles.header}>
           <View style={styles.brandRow}>
@@ -432,6 +485,12 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#101114" },
   container: { flexGrow: 1, padding: 18, paddingTop: 20, paddingBottom: 36 },
+  loadBanner: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#1D2A3A", borderRadius: 10, padding: 12, marginBottom: 12 },
+  loadText: { color: "#D8E8FF", fontSize: 13, fontWeight: "700" },
+  errorBanner: { backgroundColor: "#3A1D20", borderColor: "#B8434A", borderWidth: 1, borderRadius: 10, padding: 12, marginBottom: 12 },
+  errorBannerText: { color: "#FFD7D9", fontSize: 13, lineHeight: 18 },
+  retryButton: { alignSelf: "flex-start", marginTop: 8, backgroundColor: "#E53935", borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7 },
+  retryButtonText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800" },
 
   header: { marginBottom: 16 },
   brandRow: { flexDirection: "row", alignItems: "center" },

@@ -18,6 +18,7 @@ import {
 } from "@/database/repositories";
 import type { StandingRow } from "@/domain/types";
 import { goBack } from "@/utils/navigation";
+import { hydrateDefaultTournament } from "@/services/initialHydration";
 
 export default function StandingsScreen() {
   const db = useSQLiteContext();
@@ -31,13 +32,14 @@ export default function StandingsScreen() {
 
   const load = useCallback(async () => {
     try {
+      await hydrateDefaultTournament(db);
       setTeams(await listGroupTeams(db, DEFAULT_TOURNAMENT_ID));
       setResults(await listGroupResults(db, DEFAULT_TOURNAMENT_ID));
       setKnockoutMatches(await listKnockoutMatches(db, DEFAULT_TOURNAMENT_ID));
       setChampion(await getTournamentChampion(db, DEFAULT_TOURNAMENT_ID));
       setGroupPhaseFinished(await isGroupPhaseFinished(db, DEFAULT_TOURNAMENT_ID));
-    } catch {
-      // Ignorar error si base no está lista
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "No se pudo cargar la clasificación.");
     }
   }, [db]);
 

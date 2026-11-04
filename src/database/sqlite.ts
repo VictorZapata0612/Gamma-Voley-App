@@ -154,7 +154,11 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
   const versionRow = await db.getFirstAsync<{ user_version: number }>("PRAGMA user_version");
   const currentVersion = versionRow?.user_version ?? 0;
   if (currentVersion > SCHEMA_VERSION) {
-    throw new Error(`La base local (${currentVersion}) es más nueva que esta aplicación (${SCHEMA_VERSION}).`);
+    // Future schema versions may add tables or indexes without breaking this app.
+    // Ensure the structures required by this version exist, but never downgrade
+    // the database version or run migrations intended for older schemas.
+    await db.execAsync(INITIAL_SCHEMA);
+    return;
   }
   if (currentVersion === SCHEMA_VERSION) return;
 

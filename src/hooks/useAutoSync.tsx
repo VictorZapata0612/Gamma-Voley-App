@@ -8,6 +8,8 @@ import { SupabaseSyncProvider } from "@/services/apiProvider";
  */
 export function useAutoSync(db: SQLiteDatabase, intervalMs: number = 2000) {
   useEffect(() => {
+    if (process.env.EXPO_OS === "web") return;
+
     const provider = new SupabaseSyncProvider(db);
 
     const sync = async () => {

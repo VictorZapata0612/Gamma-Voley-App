@@ -11,6 +11,7 @@ import {
 } from "@/database/repositories";
 import { goBack } from "@/utils/navigation";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
+import { useTournamentRealtime } from "@/hooks/useTournamentRealtime";
 
 export default function CalendarScreen() {
   const db = useSQLiteContext();
@@ -29,6 +30,12 @@ export default function CalendarScreen() {
       setError(reason instanceof Error ? reason.message : "No se pudo cargar el calendario.");
     }
   }, [db]);
+
+  const handleRealtimeError = useCallback((realtimeError: Error) => {
+    setError(realtimeError.message);
+  }, []);
+
+  useTournamentRealtime(DEFAULT_TOURNAMENT_ID, load, handleRealtimeError);
 
   useFocusEffect(
     useCallback(() => {

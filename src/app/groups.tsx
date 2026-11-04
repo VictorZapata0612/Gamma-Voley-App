@@ -8,6 +8,7 @@ import { createRoundRobinSchedule, validateGroupAssignments } from "@/domain/sch
 import { goBack } from "@/utils/navigation";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
 import { supabase } from "@/services/supabase";
+import { useTournamentRealtime } from "@/hooks/useTournamentRealtime";
 
 async function loadRemoteGroupTeams(): Promise<GroupTeamRecord[]> {
   const [teamsResult, groupsResult, membershipsResult] = await Promise.all([
@@ -65,6 +66,12 @@ export default function GroupsScreen() {
       setMessage(error instanceof Error ? error.message : "No se pudieron cargar los grupos.");
     }
   }, [db]);
+
+  const handleRealtimeError = useCallback((error: Error) => {
+    setMessage(error.message);
+  }, []);
+
+  useTournamentRealtime(DEFAULT_TOURNAMENT_ID, load, handleRealtimeError);
 
   useFocusEffect(
     useCallback(() => {

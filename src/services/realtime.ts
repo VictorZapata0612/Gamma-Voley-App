@@ -35,6 +35,7 @@ type RemoteTimeout = {
 };
 
 export type MatchRealtimeStatus = "CONNECTING" | "SUBSCRIBED" | "CHANNEL_ERROR" | "TIMED_OUT" | "CLOSED";
+export type TournamentRealtimeStatus = MatchRealtimeStatus;
 
 function throwIfError(error: { message: string } | null): void {
   if (error) throw new Error(error.message);
@@ -292,9 +293,56 @@ export function subscribeToMatchRealtime(
     ) {
       onStatus(status);
     }
+
     if (status === "SUBSCRIBED") scheduleReconcile();
     if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
       onError(new Error(`La suscripción en tiempo real no está disponible (${status}).`));
+    }
+  });
+
+  return () => {
+    void supabase.removeChannel(channel);
+  };
+}
+
+export function subscribeToTournamentRealtime(
+  tournamentId: string,
+  onUpdated: () => void,
+  onError: (error: Error) => void,
+  onStatus?: (status: TournamentRealtimeStatus) => void,
+): () => void {
+  const notifyUpdate = () => onUpdated();
+  const channel = supabase
+    .channel(`tournament-realtime-${tournamentId}`)
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "tournaments", filter: `id=eq.${tournamentId}` },
+      notifyUpdate,
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "teams", filter: `tournament_id=eq.${tournamentId}` },
+      notifyUpdate,
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "groups", filter: `tournament_id=eq.${tournamentId}` },
+      notifyUpdate,
+    )
+    .on("postgres_changes", { event: "*", schema: "public", table: "group_memberships" }, notifyUpdate)
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "matches", filter: `tournament_id=eq.${tournamentId}` },
+      notifyUpdate,
+    )
+    .on("postgres_changes", { event: "*", schema: "public", table: "match_sets" }, notifyUpdate)
+    .on("postgres_changes", { event: "*", schema: "public", table: "score_events" }, notifyUpdate)
+    .on("postgres_changes", { event: "*", schema: "public", table: "timeouts" }, notifyUpdate);
+
+  channel.subscribe((status) => {
+    onStatus?.(status as TournamentRealtimeStatus);
+    if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+      onError(new Error(`La suscripción del torneo no está disponible (${status}).`));
     }
   });
 

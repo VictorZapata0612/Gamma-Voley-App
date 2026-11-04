@@ -19,6 +19,7 @@ import {
 import type { StandingRow } from "@/domain/types";
 import { goBack } from "@/utils/navigation";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
+import { useTournamentRealtime } from "@/hooks/useTournamentRealtime";
 
 export default function StandingsScreen() {
   const db = useSQLiteContext();
@@ -42,6 +43,12 @@ export default function StandingsScreen() {
       setMessage(reason instanceof Error ? reason.message : "No se pudo cargar la clasificación.");
     }
   }, [db]);
+
+  const handleRealtimeError = useCallback((realtimeError: Error) => {
+    setMessage(realtimeError.message);
+  }, []);
+
+  useTournamentRealtime(DEFAULT_TOURNAMENT_ID, load, handleRealtimeError);
 
   useFocusEffect(
     useCallback(() => {

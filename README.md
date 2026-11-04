@@ -34,6 +34,9 @@ bloqueos de OPFS del navegador. La web vuelve a hidratar el torneo desde
 Supabase al abrirse; el almacenamiento persistente queda reservado para móvil.
 La cola automática de escritura offline solo se ejecuta en móvil, donde existe
 persistencia local; la web carga los datos públicos directamente desde Supabase.
+Las pantallas de grupos, calendario y clasificación mantienen una suscripción
+Realtime al torneo mientras están abiertas y vuelven a cargar sus datos cuando
+cambia una asignación, partido, set, resultado o tiempo muerto.
 
 Si una pestaña anterior muestra `Invalid VFS state`,
 `createSyncAccessHandle` o `Error finalizing statement`, cierra las pestañas

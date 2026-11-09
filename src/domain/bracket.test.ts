@@ -28,6 +28,7 @@ describe("Cuadro Eliminatorio (Playoffs) y Fase Final", () => {
         makeStandingRow("team-A2", 4, 5),
         makeStandingRow("team-A3", 2, -5),
         makeStandingRow("team-A4", 0, -15),
+        makeStandingRow("team-A5", 0, -20),
       ];
 
       const groupB: StandingRow[] = [
@@ -35,6 +36,7 @@ describe("Cuadro Eliminatorio (Playoffs) y Fase Final", () => {
         makeStandingRow("team-B2", 4, 3),
         makeStandingRow("team-B3", 2, -4),
         makeStandingRow("team-B4", 0, -11),
+        makeStandingRow("team-B5", 0, -16),
       ];
 
       const bracket = buildSemifinalBracket(groupA, groupB);

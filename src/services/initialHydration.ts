@@ -88,7 +88,7 @@ export async function hydrateDefaultTournament(
         requiredString(tournament.category, "tournaments.category"),
         requiredString(tournament.starts_on, "tournaments.starts_on"),
         requiredString(tournament.ends_on, "tournaments.ends_on"),
-        numberOrDefault(tournament.max_teams, 8),
+        numberOrDefault(tournament.max_teams, 10),
         numberOrDefault(tournament.court_count, 2),
         nullableString(tournament.created_at) ?? now,
         nullableString(tournament.updated_at) ?? now,

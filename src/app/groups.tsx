@@ -4,7 +4,7 @@ import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "rea
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import { assignTeamToGroup, listGroupTeams, type GroupTeamRecord, saveScheduledGroupMatches } from "@/database/repositories";
-import { createRoundRobinSchedule, validateGroupAssignments } from "@/domain/schedule";
+import { createRoundRobinSchedule, GROUP_MATCH_COUNT, GROUP_SIZE, TOURNAMENT_TEAM_COUNT, validateGroupAssignments } from "@/domain/schedule";
 import { goBack } from "@/utils/navigation";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
 import { supabase } from "@/services/supabase";
@@ -120,8 +120,6 @@ export default function GroupsScreen() {
   const renderGroupSlotCard = (groupId: "A" | "B", groupTeams: GroupTeamRecord[]) => {
     const isGroupA = groupId === "A";
     const courtName = isGroupA ? "Cancha 1" : "Cancha 2";
-    const slots = [0, 1, 2, 3];
-
     return (
       <View style={styles.groupCard} key={groupId}>
         <View style={styles.groupHeader}>
@@ -132,12 +130,12 @@ export default function GroupsScreen() {
             <Text style={styles.courtBadgeText}>🏟️ {courtName}</Text>
           </View>
           <Text style={styles.groupSubtitle}>
-            Sábado 14 Nov · 4 equipos en formato todos contra todos (6 partidos)
+            Sábado 14 Nov · {GROUP_SIZE} equipos en formato todos contra todos ({GROUP_MATCH_COUNT} partidos)
           </Text>
         </View>
 
         <View style={styles.slotsGrid}>
-          {slots.map((index) => {
+          {Array.from({ length: GROUP_SIZE }, (_, index) => {
             const member = groupTeams[index];
             return (
               <View
@@ -159,9 +157,9 @@ export default function GroupsScreen() {
 
         <View style={styles.groupProgressRow}>
           <Text style={styles.groupProgressText}>
-            {groupTeams.length} de 4 equipos asignados
+            {groupTeams.length} de {GROUP_SIZE} equipos asignados
           </Text>
-          {groupTeams.length === 4 && (
+          {groupTeams.length === GROUP_SIZE && (
             <Text style={styles.groupCompleteText}>✓ Grupo Completo</Text>
           )}
         </View>
@@ -179,7 +177,7 @@ export default function GroupsScreen() {
         <Text style={styles.eyebrow}>ORGANIZACIÓN · SEDES DE JUEGO</Text>
         <Text style={styles.title}>Grupos y Canchas</Text>
         <Text style={styles.subtitle}>
-          Asigna los 8 equipos del torneo: Cancha 1 (Grupo A) y Cancha 2 (Grupo B)
+          Asigna los {TOURNAMENT_TEAM_COUNT} equipos del torneo: Cancha 1 (Grupo A) y Cancha 2 (Grupo B)
         </Text>
 
         {/* Alerta didáctica si la configuración no está completa */}
@@ -254,8 +252,8 @@ export default function GroupsScreen() {
         >
           <Text style={styles.generateButtonText}>
             {validation.valid
-              ? "⚡ Generar Calendario Oficial (12 Partidos)"
-              : "Completa 4 equipos por grupo para programar"}
+              ? "⚡ Generar Calendario Oficial (20 Partidos)"
+              : `Completa ${GROUP_SIZE} equipos por grupo para programar`}
           </Text>
         </Pressable>
       </ScrollView>

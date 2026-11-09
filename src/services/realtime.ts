@@ -120,6 +120,7 @@ export async function reconcileRemoteMatch(
   ) {
     throw new Error("Supabase devolvió un set de grupos superior al límite estricto de 15.");
   }
+
   const preserveLocalChanges = await hasPendingMatchChanges(db, matchId);
 
   await db.execAsync("BEGIN TRANSACTION;");
@@ -203,6 +204,21 @@ export async function reconcileRemoteMatch(
     await db.execAsync("ROLLBACK;");
     throw error;
   }
+}
+
+export async function reconcileRemoteTournament(
+  db: SQLiteDatabase,
+  tournamentId: string,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from("matches")
+    .select("id")
+    .eq("tournament_id", tournamentId);
+  throwIfError(error);
+
+  await Promise.all(
+    ((data ?? []) as { id: string }[]).map((match) => reconcileRemoteMatch(db, match.id)),
+  );
 }
 
 export function subscribeToMatchRealtime(

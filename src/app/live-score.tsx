@@ -10,7 +10,7 @@ import {
   type LiveMatchRecord,
   type ScoreEventRecord,
 } from "@/database/repositories";
-import { triggerImmediateSync } from "@/domain/liveScoring";
+import { triggerImmediateSync } from "@/services/immediateSync";
 import { isSetClosed } from "@/domain/rules";
 import { useMatchRealtime } from "@/hooks/useMatchRealtime";
 import type { MatchRealtimeStatus } from "@/services/realtime";

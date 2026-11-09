@@ -6,7 +6,7 @@ import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import { getTeamRecord, saveTeamRecord } from "@/database/repositories";
 import { goBack } from "@/utils/navigation";
-import { triggerImmediateSync } from "@/domain/liveScoring";
+import { triggerImmediateSync } from "@/services/immediateSync";
 
 export default function TeamFormScreen() {
   const db = useSQLiteContext();

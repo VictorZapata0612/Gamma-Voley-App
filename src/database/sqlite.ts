@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from "expo-sqlite";
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 export const DEFAULT_TOURNAMENT_ID = "gamma-voley-2026";
 
 const INITIAL_SCHEMA = `
@@ -178,7 +178,7 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
         "Formativa Libre",
         "2026-11-14",
         "2026-11-15",
-        8,
+        10,
         2,
         now,
         now
@@ -191,6 +191,12 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
         INSERT OR IGNORE INTO match_sets (match_id, set_number, home_points, away_points)
         SELECT id, 2, 0, 0 FROM matches WHERE phase = 'group';
       `);
+    }
+    if (currentVersion < 4) {
+      await db.runAsync(
+        "UPDATE tournaments SET max_teams = 10 WHERE id = ?",
+        DEFAULT_TOURNAMENT_ID
+      );
     }
     await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
     await db.execAsync("COMMIT;");

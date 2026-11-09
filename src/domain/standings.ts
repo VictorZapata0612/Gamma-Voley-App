@@ -34,13 +34,18 @@ export function calculateStandings(teams: Team[], results: MatchResult[]): Stand
     if (!home || !away) throw new Error(`Resultado ${result.matchId} referencia un equipo inexistente.`);
     const homeFor = result.sets.reduce((sum, set) => sum + set.home, 0);
     const awayFor = result.sets.reduce((sum, set) => sum + set.away, 0);
-    home.matchesPlayed += 1;
-    away.matchesPlayed += 1;
+    const isOfficialResult = result.status === "completed" || result.status === "walkover";
+    if (isOfficialResult) {
+      home.matchesPlayed += 1;
+      away.matchesPlayed += 1;
+    }
     home.pointsFor += homeFor;
     home.pointsAgainst += awayFor;
     away.pointsFor += awayFor;
     away.pointsAgainst += homeFor;
-    if (result.status === "walkover") {
+    if (result.status === "in_progress") {
+      continue;
+    } else if (result.status === "walkover") {
       const forfeiting = result.walkoverTeamId === result.homeTeamId ? home : away;
       const opponent = forfeiting === home ? away : home;
       forfeiting.losses += 1;

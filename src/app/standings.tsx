@@ -20,6 +20,7 @@ import type { StandingRow } from "@/domain/types";
 import { goBack } from "@/utils/navigation";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
 import { useTournamentRealtime } from "@/hooks/useTournamentRealtime";
+import { reconcileRemoteTournament } from "@/services/realtime";
 
 export default function StandingsScreen() {
   const db = useSQLiteContext();
@@ -34,6 +35,7 @@ export default function StandingsScreen() {
   const load = useCallback(async () => {
     try {
       await hydrateDefaultTournament(db);
+      await reconcileRemoteTournament(db, DEFAULT_TOURNAMENT_ID);
       setTeams(await listGroupTeams(db, DEFAULT_TOURNAMENT_ID));
       setResults(await listGroupResults(db, DEFAULT_TOURNAMENT_ID));
       setKnockoutMatches(await listKnockoutMatches(db, DEFAULT_TOURNAMENT_ID));

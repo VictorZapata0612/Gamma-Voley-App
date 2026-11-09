@@ -7,6 +7,7 @@ import { goBack } from "@/utils/navigation";
 import { listTeamRecords, type TeamRecord } from "@/database/repositories";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
 import { supabase } from "@/services/supabase";
+import { TOURNAMENT_TEAM_COUNT } from "@/domain/schedule";
 
 type RemoteTeam = {
   id: string;
@@ -73,7 +74,7 @@ export default function TeamsScreen() {
     }, [load])
   );
 
-  const maxTeams = 8;
+  const maxTeams = TOURNAMENT_TEAM_COUNT;
   const isFull = teams.length >= maxTeams;
 
   return (
@@ -86,7 +87,7 @@ export default function TeamsScreen() {
         <Text style={styles.eyebrow}>ADMINISTRACIÓN · PLANTILLAS OFICIALES</Text>
         <Text style={styles.title}>Equipos del Torneo</Text>
         <Text style={styles.subtitle}>
-          Categoría Formativa Libre · Máximo 8 equipos inscritos
+          Categoría Formativa Libre · Máximo {TOURNAMENT_TEAM_COUNT} equipos inscritos
         </Text>
 
         {/* Ficha de Cupos y Estado General */}
@@ -105,8 +106,8 @@ export default function TeamsScreen() {
 
           <Text style={styles.quotaHint}>
             {isFull
-              ? "✓ Cupo completo alcanzado (8 equipos). Los grupos A y B pueden conformarse con 4 equipos cada uno."
-              : `Faltan ${maxTeams - teams.length} equipo(s) para completar los 8 participantes del torneo.`}
+              ? `✓ Cupo completo alcanzado (${TOURNAMENT_TEAM_COUNT} equipos). Los grupos A y B pueden conformarse con 5 equipos cada uno.`
+              : `Faltan ${maxTeams - teams.length} equipo(s) para completar los ${TOURNAMENT_TEAM_COUNT} participantes del torneo.`}
           </Text>
         </View>
 
@@ -198,7 +199,7 @@ export default function TeamsScreen() {
         ) : (
           <View style={styles.fullNotice}>
             <Text style={styles.fullNoticeText}>
-              Se ha alcanzado el límite máximo de 8 equipos reglamentarios.
+              Se ha alcanzado el límite máximo de {TOURNAMENT_TEAM_COUNT} equipos reglamentarios.
             </Text>
           </View>
         )}

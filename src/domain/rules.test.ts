@@ -233,6 +233,39 @@ describe("clasificación y cuadro", () => {
     expect(rows[1].classificationPoints).toBe(1);
   });
 
+  it("actualiza el diferencial con un partido de grupos en curso sin asignar resultado oficial", () => {
+    const live = {
+      matchId: "m-live",
+      phase: "group" as const,
+      homeTeamId: "a",
+      awayTeamId: "b",
+      sets: [{ home: 8, away: 5 }],
+      status: "in_progress" as const,
+      winner: null,
+    };
+    const rows = calculateStandings(
+      [
+        { id: "a", name: "A" },
+        { id: "b", name: "B" },
+      ],
+      [live],
+    );
+    expect(rows[0]).toMatchObject({
+      teamId: "a",
+      matchesPlayed: 0,
+      wins: 0,
+      classificationPoints: 0,
+      pointDifferential: 3,
+    });
+    expect(rows[1]).toMatchObject({
+      teamId: "b",
+      matchesPlayed: 0,
+      wins: 0,
+      classificationPoints: 0,
+      pointDifferential: -3,
+    });
+  });
+
   it("marca empate administrativo cuando el diferencial no resuelve", () => {
     const rows = calculateStandings(
       [

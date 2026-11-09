@@ -1,6 +1,7 @@
 import type { SQLiteDatabase } from "expo-sqlite";
 import type { GroupId, Match, MatchResult, ScoreAction, SemifinalBracket, SetScore, Team, TimeoutState } from "@/domain/types";import type { Player } from "@/domain/eligibility";
 import type { ScheduledGroupMatch } from "@/domain/schedule";
+import { GROUP_SIZE } from "@/domain/schedule";
 import { deriveMatchProgress, type MatchProgress } from "@/domain/liveScoring";
 import { getTimeoutSetNumber, isSetClosed } from "@/domain/rules";
 import { walkoverSets } from "@/domain/walkover";
@@ -83,7 +84,7 @@ export async function assignTeamToGroup(db: SQLiteDatabase, tournamentId: string
      WHERE g.tournament_id = ? AND g.name = ? AND gm.team_id <> ?`,
     tournamentId, groupId, teamId
   );
-  if ((count?.count ?? 0) >= 4) throw new Error(`El grupo ${groupId} ya tiene 4 equipos.`);
+  if ((count?.count ?? 0) >= GROUP_SIZE) throw new Error(`El grupo ${groupId} ya tiene ${GROUP_SIZE} equipos.`);
   const group = await db.getFirstAsync<{ id: string }>(
     "SELECT id FROM groups WHERE tournament_id = ? AND name = ?", tournamentId, groupId
   );
@@ -416,11 +417,11 @@ export async function listCalendarMatches(db: SQLiteDatabase, tournamentId: stri
 
 export async function listGroupResults(db: SQLiteDatabase, tournamentId: string): Promise<MatchResult[]> {
   const rows = await db.getAllAsync<{
-    id: string; home_team_id: string; away_team_id: string; status: "completed" | "walkover";
+    id: string; home_team_id: string; away_team_id: string; status: "completed" | "in_progress" | "walkover";
     winner: "home" | "away" | null; walkover_team_id: string | null;
   }>(
     `SELECT id, home_team_id, away_team_id, status, winner, walkover_team_id
-     FROM matches WHERE tournament_id = ? AND phase = 'group' AND status IN ('completed', 'walkover')`,
+     FROM matches WHERE tournament_id = ? AND phase = 'group' AND status IN ('completed', 'in_progress', 'walkover')`,
     tournamentId
   );
   const results: MatchResult[] = [];

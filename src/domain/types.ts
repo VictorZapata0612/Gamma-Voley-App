@@ -53,7 +53,7 @@ export type MatchResult = {
   homeTeamId: string;
   awayTeamId: string;
   sets: SetScore[];
-  status: "completed" | "walkover";
+  status: "completed" | "in_progress" | "walkover";
   winner: MatchWinner;
   walkoverTeamId?: string;
 };

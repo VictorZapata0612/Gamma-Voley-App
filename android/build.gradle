@@ -21,5 +21,20 @@ allprojects {
   }
 }
 
+// Ensure every native Android library links the shared C++ runtime. The
+// generated CMake link lines otherwise omit libc++ for this project.
+subprojects { subproject ->
+  ['com.android.library', 'com.android.application'].each { pluginId ->
+    subproject.plugins.withId(pluginId) {
+      def androidExtension = subproject.extensions.findByName('android')
+      def cmake = androidExtension?.defaultConfig?.externalNativeBuild?.cmake
+      def cxxRuntimeArgument = '-DCMAKE_CXX_STANDARD_LIBRARIES=-lc++_shared -latomic -lm'
+      if (cmake != null && !cmake.arguments.any { it.startsWith('-DCMAKE_CXX_STANDARD_LIBRARIES=') }) {
+        cmake.arguments.add(cxxRuntimeArgument)
+      }
+    }
+  }
+}
+
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"

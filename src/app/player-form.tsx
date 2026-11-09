@@ -5,7 +5,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useSQLiteContext } from "expo-sqlite";
 import { getPlayer, savePlayer } from "@/database/repositories";
 import { goBack } from "@/utils/navigation";
-import { triggerImmediateSync } from "@/domain/liveScoring";
+import { triggerImmediateSync } from "@/services/immediateSync";
 
 export default function PlayerFormScreen() {
   const db = useSQLiteContext();

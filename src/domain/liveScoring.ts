@@ -1,8 +1,5 @@
 import { getGroupMatchWinner, getKnockoutMatchWinner, isMatchComplete, isSetClosed } from "./rules";
 import type { SetScore, TournamentPhase } from "./types";
-import type { SQLiteDatabase } from "expo-sqlite";
-import { processSyncQueue } from "@/services/sync";
-import { SupabaseSyncProvider } from "@/services/apiProvider";
 
 export function nextSetNumber(phase: TournamentPhase, sets: SetScore[]): number {
   const winner = phase === "group" ? getGroupMatchWinner(sets) : getKnockoutMatchWinner(sets);
@@ -40,16 +37,4 @@ export function deriveMatchProgress(phase: TournamentPhase, sets: SetScore[]): M
     if (winner) return { setCount: setNumber, winner };
   }
   return { setCount: played.length, winner: null };
-}
-
-/**
- * Función auxiliar para enviar datos a Supabase inmediatamente tras una acción
- */
-export async function triggerImmediateSync(db: SQLiteDatabase): Promise<void> {
-  try {
-    const provider = new SupabaseSyncProvider(db);
-    await processSyncQueue(db, provider);
-  } catch {
-    // Si no hay internet, el evento queda guardado en SQLite (sync_queue) para después
-  }
 }

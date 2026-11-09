@@ -93,7 +93,7 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
         category: "Formativa Libre",
         starts_on: "2026-11-14",
         ends_on: "2026-11-15",
-        max_teams: 8,
+        max_teams: 10,
         court_count: 2,
       });
       return;

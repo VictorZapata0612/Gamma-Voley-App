@@ -127,6 +127,10 @@ const teams = await db.getAllAsync<{
   contact: string | null;
   registration_status: string;
   payment_status: string;
+  initial_payment_status: string;
+  balance_payment_status: string;
+  initial_payment_paid_at: string | null;
+  balance_payment_paid_at: string | null;
 }>("SELECT * FROM teams");
 for (const team of teams) {
   await db.runAsync(
@@ -142,6 +146,10 @@ for (const team of teams) {
       contact: team.contact,
       registrationStatus: team.registration_status,
       paymentStatus: team.payment_status,
+      initialPaymentStatus: team.initial_payment_status,
+      balancePaymentStatus: team.balance_payment_status,
+      initialPaymentPaidAt: team.initial_payment_paid_at,
+      balancePaymentPaidAt: team.balance_payment_paid_at,
     }),
     now,
     now
@@ -316,6 +324,194 @@ for (const membership of memberships) {
       }),
       now,
       now
+    );
+  }
+
+  const lineups = await db.getAllAsync<{
+    match_id: string;
+    set_number: number;
+    team: "home" | "away";
+    position: number;
+    player_id: string;
+    initial_position: number;
+  }>("SELECT match_id, set_number, team, position, player_id, initial_position FROM match_lineups");
+  for (const team of ["home", "away"] as const) {
+    const grouped = new Map<string, typeof lineups>();
+    for (const lineup of lineups.filter((row) => row.team === team)) {
+      const key = `${lineup.match_id}-${lineup.set_number}`;
+      const current = grouped.get(key) ?? [];
+      current.push(lineup);
+      grouped.set(key, current);
+    }
+    for (const [key, rows] of grouped) {
+      if (rows.length !== 6) continue;
+      const state = await db.getFirstAsync<{
+        server_player_id: string;
+        server_position: number;
+        is_serving: number;
+        rotation_number: number;
+      }>(
+        "SELECT server_player_id, server_position, is_serving, rotation_number FROM set_alignment_state WHERE match_id = ? AND set_number = ? AND team = ?",
+        rows[0].match_id, rows[0].set_number, team,
+      );
+      if (!state) continue;
+      await db.runAsync(
+        `INSERT OR REPLACE INTO sync_queue
+          (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+         VALUES (?, 'match_alignment', ?, 'save_alignment_state', ?, 'pending', 0, NULL, ?, ?)`,
+        `requeue-alignment-${key}-${team}`,
+        key,
+        JSON.stringify({
+          matchId: rows[0].match_id,
+          setNumber: rows[0].set_number,
+          team,
+          lineup: rows.map((row) => ({ playerId: row.player_id, position: row.position, initialPosition: row.initial_position })),
+          serverPlayerId: state.server_player_id,
+          serverPosition: state.server_position,
+          isServing: state.is_serving === 1,
+          rotationNumber: state.rotation_number,
+        }),
+        now,
+        now,
+      );
+    }
+  }
+
+  const faults = await db.getAllAsync<{
+    id: string;
+    match_id: string;
+    set_number: number;
+    team: string;
+    incorrect_server_player_id: string | null;
+    incorrect_position: number | null;
+    sanction: string;
+    reason: string;
+    awarded_to: "home" | "away" | null;
+    sanction_applied: number;
+    occurred_at: string | null;
+    points_to_annul_json: string | null;
+    correction_of_id: string | null;
+    created_at: string;
+  }>("SELECT * FROM rotation_faults");
+  for (const fault of faults) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue
+        (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+       VALUES (?, 'rotation_fault', ?, 'save_rotation_fault', ?, 'pending', 0, NULL, ?, ?)`,
+      `requeue-fault-${fault.id}`,
+      fault.id,
+      JSON.stringify({
+        id: fault.id,
+        matchId: fault.match_id,
+        setNumber: fault.set_number,
+        team: fault.team,
+        incorrectServerPlayerId: fault.incorrect_server_player_id,
+        incorrectPosition: fault.incorrect_position,
+        sanction: fault.sanction,
+        reason: fault.reason,
+        awardedTo: fault.awarded_to,
+        sanctionApplied: fault.sanction_applied === 1,
+        occurredAt: fault.occurred_at,
+        pointsToAnnul: fault.points_to_annul_json ? JSON.parse(fault.points_to_annul_json) as string[] : [],
+        correctionOfId: fault.correction_of_id,
+        createdAt: fault.created_at,
+      }),
+      now,
+      now,
+    );
+  }
+
+  const substitutions = await db.getAllAsync<{
+    id: string;
+    match_id: string;
+    set_number: number;
+    team: "home" | "away";
+    player_out_id: string;
+    player_in_id: string;
+    position: number;
+    rotation_number: number;
+    score_home: number;
+    score_away: number;
+    occurred_at: string;
+    corrects_event_id: string | null;
+    created_at: string;
+  }>("SELECT * FROM substitution_events");
+  for (const substitution of substitutions) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue
+        (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+       VALUES (?, 'substitution_event', ?, 'save_substitution', ?, 'pending', 0, NULL, ?, ?)`,
+      `requeue-substitution-${substitution.id}`,
+      substitution.id,
+      JSON.stringify({
+        id: substitution.id,
+        matchId: substitution.match_id,
+        setNumber: substitution.set_number,
+        team: substitution.team,
+        playerOutId: substitution.player_out_id,
+        playerInId: substitution.player_in_id,
+        position: substitution.position,
+        rotationNumber: substitution.rotation_number,
+        scoreHome: substitution.score_home,
+        scoreAway: substitution.score_away,
+        occurredAt: substitution.occurred_at,
+        correctsEventId: substitution.corrects_event_id,
+        createdAt: substitution.created_at,
+      }),
+      now,
+      now,
+    );
+  }
+
+  const walkovers = await db.getAllAsync<{
+    id: string;
+    match_id: string;
+    absent_team: "home" | "away";
+    called_at: string;
+    wait_deadline: string;
+    confirmed_at: string | null;
+    referee_decision_by: string | null;
+    referee_confirmed_at: string | null;
+    home_present_count: number | null;
+    away_present_count: number | null;
+    player_condition_note: string | null;
+    status: "called" | "confirmed";
+    created_at: string;
+  }>("SELECT * FROM walkover_events");
+  for (const walkover of walkovers) {
+    const confirmed = walkover.status === "confirmed";
+    const match = confirmed
+      ? await db.getFirstAsync<{ winner: "home" | "away"; walkover_team_id: string; updated_at: string }>(
+          "SELECT winner, walkover_team_id, updated_at FROM matches WHERE id = ?",
+          walkover.match_id,
+        )
+      : null;
+    const sets = confirmed
+      ? await db.getAllAsync<{ home_points: number; away_points: number }>(
+          "SELECT home_points, away_points FROM match_sets WHERE match_id = ? ORDER BY set_number",
+          walkover.match_id,
+        )
+      : [];
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue
+        (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+       VALUES (?, 'walkover_event', ?, ?, ?, 'pending', 0, NULL, ?, ?)`,
+      `requeue-walkover-${walkover.id}`,
+      walkover.id,
+      confirmed ? "confirm_walkover" : "start_walkover_call",
+      JSON.stringify({
+        id: walkover.id, matchId: walkover.match_id, absentTeam: walkover.absent_team,
+        calledAt: walkover.called_at, waitDeadline: walkover.wait_deadline,
+        confirmedAt: walkover.confirmed_at, refereeDecisionBy: walkover.referee_decision_by,
+        refereeConfirmedAt: walkover.referee_confirmed_at,
+        homePresentCount: walkover.home_present_count, awayPresentCount: walkover.away_present_count,
+        playerConditionNote: walkover.player_condition_note, status: walkover.status,
+        winner: match?.winner, absentTeamId: match?.walkover_team_id,
+        sets: sets.map((set) => ({ home: set.home_points, away: set.away_points })),
+        createdAt: walkover.created_at,
+      }),
+      now,
+      now,
     );
   }
 }

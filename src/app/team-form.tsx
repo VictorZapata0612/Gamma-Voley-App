@@ -14,7 +14,8 @@ export default function TeamFormScreen() {
   const [name, setName] = useState("");
   const [captain, setCaptain] = useState("");
   const [contact, setContact] = useState("");
-  const [paymentStatus, setPaymentStatus] = useState<"pending" | "paid">("pending");
+  const [initialPaymentStatus, setInitialPaymentStatus] = useState<"pending" | "paid">("pending");
+  const [balancePaymentStatus, setBalancePaymentStatus] = useState<"pending" | "paid">("pending");
   const [registrationStatus, setRegistrationStatus] = useState<"pending" | "confirmed" | "withdrawn">("pending");
   const [error, setError] = useState<string | null>(null);
 
@@ -25,7 +26,8 @@ export default function TeamFormScreen() {
           setName(team.name);
           setCaptain(team.captainName ?? "");
           setContact(team.contact ?? "");
-          setPaymentStatus(team.paymentStatus ?? "pending");
+          setInitialPaymentStatus(team.initialPaymentStatus ?? (team.paymentStatus === "paid" ? "paid" : "pending"));
+          setBalancePaymentStatus(team.balancePaymentStatus ?? (team.paymentStatus === "paid" ? "paid" : "pending"));
           setRegistrationStatus(team.registrationStatus ?? "pending");
         }
       });
@@ -41,7 +43,9 @@ export default function TeamFormScreen() {
         captainName: captain || null,
         contact: contact || null,
         registrationStatus,
-        paymentStatus,
+        paymentStatus: initialPaymentStatus === "paid" && balancePaymentStatus === "paid" ? "paid" : "pending",
+        initialPaymentStatus,
+        balancePaymentStatus,
       });
 
       // Dispara la sincronización en segundo plano con Supabase tras guardar localmente
@@ -67,24 +71,46 @@ export default function TeamFormScreen() {
         <Field label="Capitán de equipo" value={captain} onChangeText={setCaptain} placeholder="Nombre completo del capitán" />
         <Field label="Teléfono de contacto" value={contact} onChangeText={setContact} placeholder="Número de celular" keyboardType="phone-pad" />
 
-        {/* Selección de Estado de Pago ($150.000 COP) */}
+        {/* Los dos conceptos se mantienen separados para conservar sus fechas de pago. */}
         <View style={styles.selectorField}>
-          <Text style={styles.label}>Estado de Pago de Inscripción ($150.000 COP)</Text>
+          <Text style={styles.label}>Abono inicial · $75.000 COP (no reembolsable)</Text>
           <View style={styles.optionsRow}>
             <Pressable
-              onPress={() => setPaymentStatus("pending")}
-              style={[styles.optionBtn, paymentStatus === "pending" && styles.optionBtnPending]}
+              onPress={() => setInitialPaymentStatus("pending")}
+              style={[styles.optionBtn, initialPaymentStatus === "pending" && styles.optionBtnPending]}
             >
-              <Text style={[styles.optionText, paymentStatus === "pending" && styles.optionTextPending]}>
+              <Text style={[styles.optionText, initialPaymentStatus === "pending" && styles.optionTextPending]}>
                 ⏳ Pago Pendiente
               </Text>
             </Pressable>
             <Pressable
-              onPress={() => setPaymentStatus("paid")}
-              style={[styles.optionBtn, paymentStatus === "paid" && styles.optionBtnPaid]}
+              onPress={() => setInitialPaymentStatus("paid")}
+              style={[styles.optionBtn, initialPaymentStatus === "paid" && styles.optionBtnPaid]}
             >
-              <Text style={[styles.optionText, paymentStatus === "paid" && styles.optionTextPaid]}>
-                ✓ Pagado ($150.000)
+              <Text style={[styles.optionText, initialPaymentStatus === "paid" && styles.optionTextPaid]}>
+                ✓ Pagado ($75.000)
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={styles.selectorField}>
+          <Text style={styles.label}>Saldo · $75.000 COP (debe estar pagado antes del primer partido)</Text>
+          <View style={styles.optionsRow}>
+            <Pressable
+              onPress={() => setBalancePaymentStatus("pending")}
+              style={[styles.optionBtn, balancePaymentStatus === "pending" && styles.optionBtnPending]}
+            >
+              <Text style={[styles.optionText, balancePaymentStatus === "pending" && styles.optionTextPending]}>
+                ⏳ Pago Pendiente
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setBalancePaymentStatus("paid")}
+              style={[styles.optionBtn, balancePaymentStatus === "paid" && styles.optionBtnPaid]}
+            >
+              <Text style={[styles.optionText, balancePaymentStatus === "paid" && styles.optionTextPaid]}>
+                ✓ Pagado ($75.000)
               </Text>
             </Pressable>
           </View>

@@ -178,7 +178,7 @@ export default function HomeScreen() {
           <View style={styles.tournamentMeta}>
             <Text style={styles.metaBadge}>📅 14 y 15 Nov 2026</Text>
             <Text style={styles.metaBadge}>🏟️ 2 Canchas</Text>
-            <Text style={styles.metaBadge}>👥 Máx 8 Equipos</Text>
+            <Text style={styles.metaBadge}>👥 Máx 10 Equipos</Text>
           </View>
         </View>
 
@@ -418,7 +418,7 @@ export default function HomeScreen() {
               <Text style={styles.didacticBody}>
                 • Cada partido tiene <Text style={styles.highlight}>exactamente dos sets a 15 puntos base</Text>.{"\n"}
                 • El ganador se define por la <Text style={styles.highlight}>suma acumulada global de puntos</Text> de ambos sets.{"\n"}
-                • Si el acumulado queda empatado al cerrar el 2º set, <Text style={styles.highlight}>se prolonga el 2º set</Text> hasta lograr 2 puntos de ventaja o llegar a 21 máx (a 20-20 gana quien llegue a 21).
+                • Si el acumulado queda empatado al cerrar el 2º set, <Text style={styles.highlight}>se prolonga el 2º set</Text> buscando 2 puntos de ventaja, con 21 como tope absoluto (a 20-20 gana quien llegue a 21, aunque quede 21-20).
               </Text>
             </View>
 

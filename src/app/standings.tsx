@@ -111,6 +111,11 @@ const getRowsForGroup = (groupId: "A" | "B"): StandingRow[] => {
           </View>
           <Text style={styles.qualificationNotice}>Top 2 avanzan a Semifinales</Text>
         </View>
+        {rows.some((row) => row.hasProvisionalResult) && (
+          <Text style={styles.provisionalNotice}>
+            ⚡ EN VIVO: PF, PA, DIF y PTS incluyen el marcador actual. La clasificación es provisional hasta el final oficial.
+          </Text>
+        )}
 
         {rows.length === 0 ? (
           <View style={styles.emptyContainer}>
@@ -124,6 +129,8 @@ const getRowsForGroup = (groupId: "A" | "B"): StandingRow[] => {
               <Text style={[styles.colHeader, styles.colStat]}>PJ</Text>
               <Text style={[styles.colHeader, styles.colStat]}>PG</Text>
               <Text style={[styles.colHeader, styles.colStat]}>PP</Text>
+              <Text style={[styles.colHeader, styles.colStat]}>PF</Text>
+              <Text style={[styles.colHeader, styles.colStat]}>PA</Text>
               <Text style={[styles.colHeader, styles.colStat]}>DIF</Text>
               <Text style={[styles.colHeader, styles.colPts]}>PTS</Text>
             </View>
@@ -144,6 +151,9 @@ const getRowsForGroup = (groupId: "A" | "B"): StandingRow[] => {
                     <Text style={styles.teamNameText} numberOfLines={1}>
                       {teamName}
                     </Text>
+                    {row.hasProvisionalResult && (
+                      <Text style={styles.provisionalLabel}>EN VIVO · PROVISIONAL</Text>
+                    )}
                     {isQualified && (
                       <Text style={styles.qualifiedLabel}>Pase a Semifinal</Text>
                     )}
@@ -152,6 +162,8 @@ const getRowsForGroup = (groupId: "A" | "B"): StandingRow[] => {
                   <Text style={[styles.statValue, styles.colStat]}>{row.matchesPlayed}</Text>
                   <Text style={[styles.statValue, styles.colStat]}>{row.wins}</Text>
                   <Text style={[styles.statValue, styles.colStat]}>{row.losses}</Text>
+                  <Text style={[styles.statValue, styles.colStat]}>{row.pointsFor}</Text>
+                  <Text style={[styles.statValue, styles.colStat]}>{row.pointsAgainst}</Text>
                   <Text
                     style={[
                       styles.statValue,
@@ -165,7 +177,9 @@ const getRowsForGroup = (groupId: "A" | "B"): StandingRow[] => {
                   >
                     {row.pointDifferential > 0 ? `+${row.pointDifferential}` : row.pointDifferential}
                   </Text>
-                  <Text style={[styles.ptsValue, styles.colPts]}>{row.classificationPoints}</Text>
+                  <Text style={[styles.ptsValue, styles.colPts]}>
+                    {row.classificationPoints}{row.hasProvisionalResult ? "*" : ""}
+                  </Text>
                 </View>
               );
             })}
@@ -461,7 +475,7 @@ const styles = StyleSheet.create({
   colHeader: { color: "#70737C", fontSize: 10, fontWeight: "800" },
   colPos: { width: 28, textAlign: "center" },
   colTeam: { flex: 1, paddingLeft: 6 },
-  colStat: { width: 34, textAlign: "center" },
+  colStat: { width: 30, textAlign: "center" },
   colPts: { width: 44, textAlign: "right" },
 
   tableRow: {
@@ -492,6 +506,8 @@ const styles = StyleSheet.create({
 
   teamInfoCol: { flex: 1, paddingLeft: 8 },
   teamNameText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
+  provisionalNotice: { color: "#FFCC80", fontSize: 10, fontWeight: "700", marginTop: 8, lineHeight: 14 },
+  provisionalLabel: { color: "#FFCC80", fontSize: 9, fontWeight: "800", marginTop: 1 },
   qualifiedLabel: { color: "#81C784", fontSize: 9, fontWeight: "800", marginTop: 1 },
 
   statValue: { color: "#A6A8AE", fontSize: 12, fontWeight: "700", fontVariant: ["tabular-nums"] },

@@ -67,12 +67,13 @@ export async function hydrateDefaultTournament(
 
   const teamIds = teams.map((team) => requiredString(team.id, "teams.id"));
   const matchIds = matches.map((match) => requiredString(match.id, "matches.id"));
-  const [players, memberships, sets, events, timeouts] = await Promise.all([
+  const [players, memberships, sets, events, timeouts, walkovers] = await Promise.all([
     fetchRows("players", { column: "team_id", values: teamIds }),
     fetchRows("group_memberships", { column: "team_id", values: teamIds }),
     fetchRows("match_sets", { column: "match_id", values: matchIds }),
     fetchRows("score_events", { column: "match_id", values: matchIds }),
     fetchRows("timeouts", { column: "match_id", values: matchIds }),
+    fetchRows("walkover_events", { column: "match_id", values: matchIds }),
   ]);
 
   const now = new Date().toISOString();
@@ -107,8 +108,10 @@ export async function hydrateDefaultTournament(
     for (const team of teams) {
       await db.runAsync(
         `INSERT OR IGNORE INTO teams
-          (id, tournament_id, name, captain_name, contact, registration_status, payment_status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, tournament_id, name, captain_name, contact, registration_status, payment_status,
+           initial_payment_status, balance_payment_status, initial_payment_paid_at, balance_payment_paid_at,
+           created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         requiredString(team.id, "teams.id"),
         requiredString(team.tournament_id, "teams.tournament_id"),
         requiredString(team.name, "teams.name"),
@@ -116,6 +119,14 @@ export async function hydrateDefaultTournament(
         nullableString(team.contact),
         requiredString(team.registration_status, "teams.registration_status"),
         requiredString(team.payment_status, "teams.payment_status"),
+        typeof team.initial_payment_status === "string"
+          ? team.initial_payment_status
+          : team.payment_status === "paid" ? "paid" : "pending",
+        typeof team.balance_payment_status === "string"
+          ? team.balance_payment_status
+          : team.payment_status === "paid" ? "paid" : "pending",
+        nullableString(team.initial_payment_paid_at),
+        nullableString(team.balance_payment_paid_at),
         nullableString(team.created_at) ?? now,
         nullableString(team.updated_at) ?? now,
       );
@@ -205,6 +216,29 @@ export async function hydrateDefaultTournament(
         numberOrDefault(timeout.set_number, 1),
         requiredString(timeout.team, "timeouts.team"),
         requiredString(timeout.used_at, "timeouts.used_at"),
+      );
+    }
+
+    for (const walkover of walkovers) {
+      await db.runAsync(
+        `INSERT OR IGNORE INTO walkover_events
+          (id, match_id, absent_team, called_at, wait_deadline, confirmed_at,
+           referee_decision_by, referee_confirmed_at, home_present_count,
+           away_present_count, player_condition_note, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        requiredString(walkover.id, "walkover_events.id"),
+        requiredString(walkover.match_id, "walkover_events.match_id"),
+        requiredString(walkover.absent_team, "walkover_events.absent_team"),
+        requiredString(walkover.called_at, "walkover_events.called_at"),
+        requiredString(walkover.wait_deadline, "walkover_events.wait_deadline"),
+        nullableString(walkover.confirmed_at),
+        nullableString(walkover.referee_decision_by),
+        nullableString(walkover.referee_confirmed_at),
+        typeof walkover.home_present_count === "number" ? walkover.home_present_count : null,
+        typeof walkover.away_present_count === "number" ? walkover.away_present_count : null,
+        nullableString(walkover.player_condition_note),
+        requiredString(walkover.status, "walkover_events.status"),
+        nullableString(walkover.created_at) ?? now,
       );
     }
 

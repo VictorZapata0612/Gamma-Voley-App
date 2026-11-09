@@ -103,13 +103,15 @@ begin
    where match_id = p_match_id
      and set_number = p_set_number;
 
-  if v_match.phase = 'group' and p_set_number = 1 then
+  if v_match.phase = 'group' and p_set_number = 1
+     and greatest(v_new_home, v_new_away) >= 15 then
     update public.matches
        set current_set = 2,
            status = 'in_progress',
            updated_at = p_created_at
      where id = p_match_id;
-  elsif v_match.phase = 'group' and p_set_number = 2 then
+  elsif v_match.phase = 'group' and p_set_number = 2
+        and greatest(v_new_home, v_new_away) >= 15 then
     select *
       into v_set_one
       from public.match_sets

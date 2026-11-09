@@ -10,6 +10,22 @@ function getGroupPoints(result: MatchResult, winner: "home" | "away"): { winner:
   return winnerSets === 2 ? { winner: 3, loser: 0 } : { winner: 2, loser: 1 };
 }
 
+function getProvisionalWinner(result: MatchResult): "home" | "away" | null {
+  if (result.status !== "in_progress") return null;
+
+  const regularSets = result.sets.slice(0, 2);
+  const homeSets = regularSets.filter((set) => set.home > set.away).length;
+  const awaySets = regularSets.filter((set) => set.away > set.home).length;
+  if (homeSets !== awaySets) return homeSets > awaySets ? "home" : "away";
+
+  const totals = result.sets.reduce(
+    (sum, set) => ({ home: sum.home + set.home, away: sum.away + set.away }),
+    { home: 0, away: 0 },
+  );
+  if (totals.home === totals.away) return null;
+  return totals.home > totals.away ? "home" : "away";
+}
+
 export function calculateStandings(teams: Team[], results: MatchResult[]): StandingRow[] {
   const rows = new Map<string, StandingRow>(
     teams.map((team) => [
@@ -24,6 +40,7 @@ export function calculateStandings(teams: Team[], results: MatchResult[]): Stand
         pointsAgainst: 0,
         pointDifferential: 0,
         tiedForQualification: false,
+        hasProvisionalResult: false,
       },
     ])
   );
@@ -44,6 +61,19 @@ export function calculateStandings(teams: Team[], results: MatchResult[]): Stand
     away.pointsFor += awayFor;
     away.pointsAgainst += homeFor;
     if (result.status === "in_progress") {
+      home.hasProvisionalResult = true;
+      away.hasProvisionalResult = true;
+      const provisionalWinner = getProvisionalWinner(result);
+      if (provisionalWinner) {
+        const points = getGroupPoints(result, provisionalWinner);
+        if (provisionalWinner === "home") {
+          home.classificationPoints += points.winner;
+          away.classificationPoints += points.loser;
+        } else {
+          away.classificationPoints += points.winner;
+          home.classificationPoints += points.loser;
+        }
+      }
       continue;
     } else if (result.status === "walkover") {
       const forfeiting = result.walkoverTeamId === result.homeTeamId ? home : away;
@@ -71,7 +101,10 @@ export function calculateStandings(teams: Team[], results: MatchResult[]): Stand
   const sorted = [...rows.values()].map((row) => ({
     ...row,
     pointDifferential: row.pointsFor - row.pointsAgainst,
-  })).sort((a, b) => b.classificationPoints - a.classificationPoints || b.pointDifferential - a.pointDifferential);
+  })).sort((a, b) =>
+    b.classificationPoints - a.classificationPoints ||
+    b.pointDifferential - a.pointDifferential
+  );
 
   for (let index = 0; index < sorted.length - 1; index += 1) {
     const current = sorted[index];

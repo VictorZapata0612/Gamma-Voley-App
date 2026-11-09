@@ -57,9 +57,10 @@ describe("reglas de sets y partidos", () => {
     expect(isSetClosed("group", { home: 3, away: 1 }, 3)).toBe(true);
   });
 
-  it("cierra la prolongación en 21 tras 20-20", () => {
+  it("cierra la prolongación en 21 tras 20-20 aunque no haya ventaja de dos", () => {
     expect(isSetClosed("group", { home: 5, away: 5 }, 3)).toBe(false);
     expect(isSetClosed("group", { home: 6, away: 5 }, 3)).toBe(true);
+    expect(toDisplaySetScore("group", 3, { home: 6, away: 5 })).toEqual({ home: 21, away: 20 });
   });
 
   it("la prolongación comparte los tiempos muertos del set 2", () => {
@@ -254,15 +255,17 @@ describe("clasificación y cuadro", () => {
       teamId: "a",
       matchesPlayed: 0,
       wins: 0,
-      classificationPoints: 0,
+      classificationPoints: 2,
       pointDifferential: 3,
+      hasProvisionalResult: true,
     });
     expect(rows[1]).toMatchObject({
       teamId: "b",
       matchesPlayed: 0,
       wins: 0,
-      classificationPoints: 0,
+      classificationPoints: 1,
       pointDifferential: -3,
+      hasProvisionalResult: true,
     });
   });
 

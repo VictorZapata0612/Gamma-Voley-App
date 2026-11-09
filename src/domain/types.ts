@@ -3,6 +3,7 @@ export type GroupId = "A" | "B";
 export type TeamGender = "female" | "male";
 export type MatchStatus = "scheduled" | "in_progress" | "completed" | "walkover";
 export type MatchWinner = "home" | "away" | null;
+export type PaymentStatus = "pending" | "paid";
 
 export type Team = {
   id: string;
@@ -35,6 +36,23 @@ export type Match = {
   walkoverTeamId?: string;
 };
 
+export type WalkoverStatus = "called" | "confirmed";
+
+export type WalkoverRecord = {
+  id: string;
+  matchId: string;
+  absentTeam: "home" | "away";
+  calledAt: string;
+  waitDeadline: string;
+  confirmedAt: string | null;
+  refereeDecisionBy: string | null;
+  refereeConfirmedAt: string | null;
+  homePresentCount: number | null;
+  awayPresentCount: number | null;
+  playerConditionNote: string | null;
+  status: WalkoverStatus;
+};
+
 export type StandingRow = {
   teamId: string;
   matchesPlayed: number;
@@ -45,6 +63,7 @@ export type StandingRow = {
   pointsAgainst: number;
   pointDifferential: number;
   tiedForQualification: boolean;
+  hasProvisionalResult?: boolean;
 };
 
 export type MatchResult = {

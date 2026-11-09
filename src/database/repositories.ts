@@ -1,10 +1,12 @@
 import type { SQLiteDatabase } from "expo-sqlite";
-import type { GroupId, Match, MatchResult, ScoreAction, SemifinalBracket, SetScore, Team, TimeoutState } from "@/domain/types";import type { Player } from "@/domain/eligibility";
+import type { GroupId, Match, MatchResult, PaymentStatus, ScoreAction, SemifinalBracket, SetScore, Team, TimeoutState, WalkoverRecord } from "@/domain/types";import type { Player } from "@/domain/eligibility";
 import type { ScheduledGroupMatch } from "@/domain/schedule";
-import { GROUP_SIZE } from "@/domain/schedule";
+import { GROUP_SIZE, TOURNAMENT_TEAM_COUNT } from "@/domain/schedule";
 import { deriveMatchProgress, type MatchProgress } from "@/domain/liveScoring";
 import { getTimeoutSetNumber, isSetClosed } from "@/domain/rules";
 import { walkoverSets } from "@/domain/walkover";
+import { applySubstitution, validateLineup, rotateClockwise, type CourtPosition, type LineupPlayer } from "@/domain/alignment";
+import { MAX_TEAM_PLAYERS, validatePlayerRegistration } from "@/domain/registration";
 
 type TeamRow = {
   id: string;
@@ -27,7 +29,11 @@ export type TeamRecord = Team & {
   captainName: string | null;
   contact: string | null;
   registrationStatus: "pending" | "confirmed" | "withdrawn";
-  paymentStatus: "pending" | "paid";
+  paymentStatus: PaymentStatus;
+  initialPaymentStatus?: PaymentStatus;
+  balancePaymentStatus?: PaymentStatus;
+  initialPaymentPaidAt?: string | null;
+  balancePaymentPaidAt?: string | null;
 };
 
 export type PlayerRecord = Player & { jerseyNumber: number | null };
@@ -40,6 +46,55 @@ export type ScoreEventRecord = {
   team: "home" | "away";
   delta: 1 | -1;
   reason: string | null;
+  createdAt: string;
+};
+
+export type AlignmentPlayerRecord = {
+  playerId: string;
+  playerName: string;
+  jerseyNumber: number | null;
+  position: CourtPosition;
+  initialPosition: CourtPosition;
+  isServer: boolean;
+};
+
+export type AlignmentRecord = {
+  team: "home" | "away";
+  serverPlayerId: string;
+  serverPosition: CourtPosition;
+  isServing: boolean;
+  rotationNumber: number;
+  players: AlignmentPlayerRecord[];
+};
+
+export type RotationFaultRecord = {
+  id: string;
+  setNumber: number;
+  team: "home" | "away";
+  incorrectServerPlayerId: string | null;
+  incorrectPosition: CourtPosition | null;
+  sanction: string;
+  reason: string;
+  awardedTo: "home" | "away" | null;
+  sanctionApplied: boolean;
+  occurredAt: string | null;
+  pointsToAnnul: string[];
+  correctionOfId: string | null;
+  createdAt: string;
+};
+
+export type SubstitutionEventRecord = {
+  id: string;
+  setNumber: number;
+  team: "home" | "away";
+  playerOutId: string;
+  playerInId: string;
+  position: CourtPosition;
+  rotationNumber: number;
+  scoreHome: number;
+  scoreAway: number;
+  occurredAt: string;
+  correctsEventId: string | null;
   createdAt: string;
 };
 
@@ -57,6 +112,10 @@ export type LiveMatchRecord = {
   timeouts: TimeoutState;
   recentEvents: ScoreEventRecord[];
   pendingSyncCount: number;
+  alignments: AlignmentRecord[];
+  rotationFaults: RotationFaultRecord[];
+  substitutions: SubstitutionEventRecord[];
+  walkover: WalkoverRecord | null;
 };
 
 export async function listTeams(db: SQLiteDatabase, tournamentId: string): Promise<Team[]> {
@@ -214,6 +273,104 @@ export async function getLiveMatch(db: SQLiteDatabase, matchId: string): Promise
   const pendingRow = await db.getFirstAsync<{ count: number }>(
     "SELECT COUNT(*) AS count FROM sync_queue WHERE status = 'pending'"
   );
+  const alignmentRows = await db.getAllAsync<{
+    team: "home" | "away";
+    player_id: string;
+    player_name: string;
+    jersey_number: number | null;
+    position: CourtPosition;
+    initial_position: CourtPosition;
+    server_player_id: string;
+    server_position: CourtPosition;
+    is_serving: number;
+    rotation_number: number;
+  }>(
+    `SELECT l.team, l.player_id, p.name AS player_name, p.jersey_number,
+      l.position, l.initial_position, s.server_player_id, s.server_position, s.rotation_number
+     FROM match_lineups l
+     JOIN players p ON p.id = l.player_id
+     JOIN set_alignment_state s
+       ON s.match_id = l.match_id AND s.set_number = l.set_number AND s.team = l.team
+     WHERE l.match_id = ? AND l.set_number = ?
+     ORDER BY l.team, l.position`,
+    matchId,
+    match.currentSet,
+  );
+  const alignments: AlignmentRecord[] = (["home", "away"] as const).flatMap((team) => {
+    const rows = alignmentRows.filter((row) => row.team === team);
+    if (rows.length === 0) return [];
+    const state = rows[0];
+    return [{
+      team,
+      serverPlayerId: state.server_player_id,
+      serverPosition: state.server_position,
+      isServing: state.is_serving === 1,
+      rotationNumber: state.rotation_number,
+      players: rows.map((row) => ({
+        playerId: row.player_id,
+        playerName: row.player_name,
+        jerseyNumber: row.jersey_number,
+        position: row.position,
+        initialPosition: row.initial_position,
+        isServer: row.player_id === state.server_player_id,
+      })),
+    }];
+  });
+  const faultRows = await db.getAllAsync<{
+    id: string;
+    setNumber: number;
+    team: "home" | "away";
+    incorrect_server_player_id: string | null;
+    incorrect_position: CourtPosition | null;
+    sanction: string;
+    reason: string;
+    awarded_to: "home" | "away" | null;
+    sanction_applied: number;
+    occurred_at: string | null;
+    points_to_annul_json: string | null;
+    correction_of_id: string | null;
+    created_at: string;
+  }>(
+    `SELECT id, set_number AS setNumber, team,
+      incorrect_server_player_id, incorrect_position, sanction, reason,
+      awarded_to, sanction_applied, occurred_at, points_to_annul_json, correction_of_id, created_at
+     FROM rotation_faults WHERE match_id = ? ORDER BY created_at DESC LIMIT 20`,
+    matchId,
+  );
+  const substitutionRows = await db.getAllAsync<SubstitutionEventRecord & {
+    player_out_id: string;
+    player_in_id: string;
+    rotation_number: number;
+    score_home: number;
+    score_away: number;
+    occurred_at: string;
+    corrects_event_id: string | null;
+    created_at: string;
+  }>(
+    `SELECT id, set_number AS setNumber, team, player_out_id, player_in_id,
+      position, rotation_number, score_home, score_away, occurred_at,
+      corrects_event_id, created_at
+     FROM substitution_events WHERE match_id = ? ORDER BY created_at DESC LIMIT 50`,
+    matchId,
+  );
+  const walkover = await db.getFirstAsync<WalkoverRecord & {
+    match_id: string;
+    absent_team: "home" | "away";
+    called_at: string;
+    wait_deadline: string;
+    confirmed_at: string | null;
+    referee_decision_by: string | null;
+    referee_confirmed_at: string | null;
+    home_present_count: number | null;
+    away_present_count: number | null;
+    player_condition_note: string | null;
+  }>(
+    `SELECT id, match_id, absent_team, called_at, wait_deadline, confirmed_at,
+      referee_decision_by, referee_confirmed_at, home_present_count,
+      away_present_count, player_condition_note, status
+     FROM walkover_events WHERE match_id = ?`,
+    matchId,
+  );
 
   return {
     ...match,
@@ -221,7 +378,279 @@ export async function getLiveMatch(db: SQLiteDatabase, matchId: string): Promise
     timeouts,
     recentEvents,
     pendingSyncCount: pendingRow?.count ?? 0,
+    alignments,
+    rotationFaults: faultRows.map((row) => ({
+      id: row.id,
+      setNumber: row.setNumber,
+      team: row.team,
+      incorrectServerPlayerId: row.incorrect_server_player_id,
+      incorrectPosition: row.incorrect_position,
+      sanction: row.sanction,
+      reason: row.reason,
+      awardedTo: row.awarded_to,
+      sanctionApplied: row.sanction_applied === 1,
+      occurredAt: row.occurred_at,
+      pointsToAnnul: row.points_to_annul_json ? JSON.parse(row.points_to_annul_json) as string[] : [],
+      correctionOfId: row.correction_of_id,
+      createdAt: row.created_at,
+    })),
+    substitutions: substitutionRows.map((row) => ({
+      id: row.id,
+      setNumber: row.setNumber,
+      team: row.team,
+      playerOutId: row.player_out_id,
+      playerInId: row.player_in_id,
+      position: row.position,
+      rotationNumber: row.rotation_number,
+      scoreHome: row.score_home,
+      scoreAway: row.score_away,
+      occurredAt: row.occurred_at,
+      correctsEventId: row.corrects_event_id,
+      createdAt: row.created_at,
+    })),
+    walkover: walkover
+      ? {
+          id: walkover.id,
+          matchId: walkover.match_id,
+          absentTeam: walkover.absent_team,
+          calledAt: walkover.called_at,
+          waitDeadline: walkover.wait_deadline,
+          confirmedAt: walkover.confirmed_at,
+          refereeDecisionBy: walkover.referee_decision_by,
+          refereeConfirmedAt: walkover.referee_confirmed_at,
+          homePresentCount: walkover.home_present_count,
+          awayPresentCount: walkover.away_present_count,
+          playerConditionNote: walkover.player_condition_note,
+          status: walkover.status,
+        }
+      : null,
   };
+}
+
+export async function listEligiblePlayersForMatch(
+  db: SQLiteDatabase,
+  matchId: string,
+  team: "home" | "away",
+): Promise<PlayerRecord[]> {
+  const column = team === "home" ? "home_team_id" : "away_team_id";
+  const match = await db.getFirstAsync<{ team_id: string }>(
+    `SELECT ${column} AS team_id FROM matches WHERE id = ?`,
+    matchId,
+  );
+  if (!match) throw new Error("El partido no existe.");
+  return listPlayers(db, match.team_id);
+}
+
+export async function saveSetLineup(
+  db: SQLiteDatabase,
+  matchId: string,
+  setNumber: number,
+  team: "home" | "away",
+  lineup: LineupPlayer[],
+  serverPosition: CourtPosition,
+  isServing = false,
+): Promise<void> {
+  const players = await listEligiblePlayersForMatch(db, matchId, team);
+  validateLineup(players, lineup);
+  const server = lineup.find((entry) => entry.position === serverPosition);
+  if (!server) throw new Error("El servidor debe ocupar una posición de la alineación.");
+  const now = new Date().toISOString();
+  await db.execAsync("BEGIN TRANSACTION;");
+  try {
+    await db.runAsync(
+      "DELETE FROM match_lineups WHERE match_id = ? AND set_number = ? AND team = ?",
+      matchId, setNumber, team,
+    );
+    for (const entry of lineup) {
+      await db.runAsync(
+        `INSERT INTO match_lineups
+          (match_id, set_number, team, position, player_id, initial_position, current_position, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        matchId, setNumber, team, entry.position, entry.playerId, entry.position, entry.position, now,
+      );
+    }
+
+    await db.runAsync(
+      `INSERT OR REPLACE INTO set_alignment_state
+        (match_id, set_number, team, server_player_id, server_position, is_serving, rotation_number, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+      matchId, setNumber, team, server.playerId, serverPosition, isServing ? 1 : 0, now,
+    );
+    await enqueueSyncOperation(db, `lineup-${matchId}-${setNumber}-${team}`, "match_alignment", `${matchId}-${setNumber}-${team}`, "save_lineup", {
+      matchId, setNumber, team, lineup, serverPosition, isServing, serverPlayerId: server.playerId, updatedAt: now,
+    });
+    await db.execAsync("COMMIT;");
+  } catch (error) {
+    await db.execAsync("ROLLBACK;");
+    throw error;
+  }
+}
+
+export async function recordSubstitution(
+  db: SQLiteDatabase,
+  matchId: string,
+  setNumber: number,
+  team: "home" | "away",
+  playerOutId: string,
+  playerInId: string,
+  occurredAt = new Date().toISOString(),
+): Promise<void> {
+  const alignment = await db.getAllAsync<{ player_id: string; position: CourtPosition }>(
+    `SELECT player_id, position FROM match_lineups
+     WHERE match_id = ? AND set_number = ? AND team = ? ORDER BY position`,
+    matchId, setNumber, team,
+  );
+  const players = await listEligiblePlayersForMatch(db, matchId, team);
+  const next = applySubstitution(players, alignment.map((row) => ({ playerId: row.player_id, position: row.position })), {
+    playerOutId, playerInId,
+  });
+  const state = await db.getFirstAsync<{ rotation_number: number }>(
+    "SELECT rotation_number FROM set_alignment_state WHERE match_id = ? AND set_number = ? AND team = ?",
+    matchId, setNumber, team,
+  );
+  if (!state) throw new Error("No existe el estado de rotación del equipo.");
+  const match = await getLiveMatch(db, matchId);
+  if (!match) throw new Error("El partido no existe.");
+  const outgoing = alignment.find((entry) => entry.player_id === playerOutId);
+  if (!outgoing) throw new Error("El jugador saliente debe estar en cancha.");
+  const id = `substitution-${matchId}-${setNumber}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const now = new Date().toISOString();
+  await db.execAsync("BEGIN TRANSACTION;");
+  try {
+    await db.runAsync(
+      `INSERT INTO substitution_events
+        (id, match_id, set_number, team, player_out_id, player_in_id, position,
+         rotation_number, score_home, score_away, occurred_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, matchId, setNumber, team, playerOutId, playerInId, outgoing.position,
+      state.rotation_number, match.sets[setNumber - 1]?.home ?? 0, match.sets[setNumber - 1]?.away ?? 0,
+      occurredAt, now,
+    );
+    await db.runAsync(
+      "DELETE FROM match_lineups WHERE match_id = ? AND set_number = ? AND team = ?",
+      matchId, setNumber, team,
+    );
+    for (const entry of next) {
+      const original = alignment.find((row) => row.player_id === entry.playerId);
+      await db.runAsync(
+        `INSERT INTO match_lineups
+          (match_id, set_number, team, position, player_id, initial_position, current_position, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        matchId, setNumber, team, entry.position, entry.playerId,
+        original?.position ?? entry.position, entry.position, now,
+      );
+    }
+    await db.runAsync(
+      "INSERT INTO audit_log (id, entity_type, entity_id, action, details_json, created_at) VALUES (?, 'match', ?, 'substitution', ?, ?)",
+      `audit-${id}`, matchId, JSON.stringify({ id, setNumber, team, playerOutId, playerInId, position: outgoing.position, rotationNumber: state.rotation_number, occurredAt }), now,
+    );
+    await enqueueSyncOperation(db, id, "substitution_event", id, "save_substitution", {
+      id, matchId, setNumber, team, playerOutId, playerInId, position: outgoing.position,
+      rotationNumber: state.rotation_number, scoreHome: match.sets[setNumber - 1]?.home ?? 0,
+      scoreAway: match.sets[setNumber - 1]?.away ?? 0, occurredAt, createdAt: now,
+    });
+    await db.execAsync("COMMIT;");
+  } catch (error) {
+    await db.execAsync("ROLLBACK;");
+    throw error;
+  }
+}
+
+async function applySideOutRotation(
+  db: SQLiteDatabase,
+  matchId: string,
+  setNumber: number,
+  team: "home" | "away",
+  now: string,
+): Promise<void> {
+  const state = await db.getFirstAsync<{ server_player_id: string; rotation_number: number }>(
+    "SELECT server_player_id, rotation_number FROM set_alignment_state WHERE match_id = ? AND set_number = ? AND team = ?",
+    matchId, setNumber, team,
+  );
+  if (!state) return;
+  const rows = await db.getAllAsync<{ player_id: string; position: CourtPosition; initial_position: CourtPosition }>(
+    "SELECT player_id, position, initial_position FROM match_lineups WHERE match_id = ? AND set_number = ? AND team = ? ORDER BY position",
+    matchId, setNumber, team,
+  );
+  const rotated = rotateClockwise(rows.map((row) => ({ playerId: row.player_id, position: row.position })));
+  await db.runAsync("DELETE FROM match_lineups WHERE match_id = ? AND set_number = ? AND team = ?", matchId, setNumber, team);
+  for (const entry of rotated) {
+    const original = rows.find((row) => row.player_id === entry.playerId);
+    await db.runAsync(
+      `INSERT INTO match_lineups
+        (match_id, set_number, team, position, player_id, initial_position, current_position, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      matchId, setNumber, team, entry.position, entry.playerId, original?.initial_position ?? entry.position, entry.position, now,
+    );
+  }
+  const server = rotated.find((entry) => entry.position === 1);
+  if (!server) throw new Error("La rotación dejó la alineación incompleta.");
+  const rotatedWithInitialPosition = rotated.map((entry) => ({
+    ...entry,
+    initialPosition: rows.find((row) => row.player_id === entry.playerId)?.initial_position ?? entry.position,
+  }));
+  const rotationId = `rotation-${matchId}-${setNumber}-${team}-${state.rotation_number + 1}`;
+  await db.runAsync(
+    `UPDATE set_alignment_state
+     SET server_player_id = ?, server_position = 1, is_serving = 1, rotation_number = rotation_number + 1, updated_at = ?
+     WHERE match_id = ? AND set_number = ? AND team = ?`,
+    server.playerId, now, matchId, setNumber, team,
+  );
+  await db.runAsync(
+    "UPDATE set_alignment_state SET is_serving = CASE WHEN team = ? THEN 1 ELSE 0 END WHERE match_id = ? AND set_number = ?",
+    team, matchId, setNumber,
+  );
+  await db.runAsync(
+    `INSERT INTO rotation_events
+      (id, match_id, set_number, team, trigger, from_positions_json, to_positions_json, created_at)
+     VALUES (?, ?, ?, ?, 'side_out', ?, ?, ?)`,
+    rotationId, matchId, setNumber, team, JSON.stringify(rows), JSON.stringify(rotated), now,
+  );
+  await enqueueSyncOperation(db, rotationId, "rotation_event", rotationId, "save_rotation", {
+    id: rotationId, matchId, setNumber, team, trigger: "side_out",
+    fromPositions: rows, toPositions: rotatedWithInitialPosition, serverPlayerId: server.playerId, serverPosition: 1,
+    rotationNumber: state.rotation_number + 1, createdAt: now,
+  });
+}
+
+export async function recordRotationFault(
+  db: SQLiteDatabase,
+  matchId: string,
+  setNumber: number,
+  team: "home" | "away",
+  incorrectServerPlayerId: string | null,
+  incorrectPosition: CourtPosition | null,
+  sanction: string,
+  reason: string,
+  options?: {
+    awardedTo?: "home" | "away";
+    occurredAt?: string | null;
+    pointsToAnnul?: string[];
+    correctionOfId?: string | null;
+  },
+): Promise<void> {
+  if (!sanction.trim() || !reason.trim()) throw new Error("La falta requiere sanción y motivo.");
+  const id = `rotation-fault-${matchId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `INSERT INTO rotation_faults
+      (id, match_id, set_number, team, incorrect_server_player_id, incorrect_position, sanction, reason,
+       awarded_to, sanction_applied, occurred_at, points_to_annul_json, correction_of_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id, matchId, setNumber, team, incorrectServerPlayerId, incorrectPosition, sanction.trim(), reason.trim(),
+    options?.awardedTo ?? null, options?.awardedTo ? 1 : 0, options?.occurredAt ?? null,
+    JSON.stringify(options?.pointsToAnnul ?? []), options?.correctionOfId ?? null, now,
+  );
+  await db.runAsync(
+    "INSERT INTO audit_log (id, entity_type, entity_id, action, details_json, created_at) VALUES (?, 'match', ?, 'rotation_fault', ?, ?)",
+    `audit-${id}`, matchId, JSON.stringify({ id, setNumber, team, incorrectServerPlayerId, incorrectPosition, sanction, reason, ...options }), now,
+  );
+  await enqueueSyncOperation(db, id, "rotation_fault", id, "save_rotation_fault", {
+    id, matchId, setNumber, team, incorrectServerPlayerId, incorrectPosition, sanction, reason,
+    awardedTo: options?.awardedTo ?? null, sanctionApplied: Boolean(options?.awardedTo),
+    occurredAt: options?.occurredAt ?? null, pointsToAnnul: options?.pointsToAnnul ?? [],
+    correctionOfId: options?.correctionOfId ?? null, createdAt: now,
+  });
 }
 
 export async function recordLiveScoreAction(db: SQLiteDatabase, matchId: string, action: ScoreAction): Promise<LiveMatchRecord> {
@@ -246,6 +675,15 @@ export async function recordLiveScoreAction(db: SQLiteDatabase, matchId: string,
     await db.runAsync("INSERT INTO score_events (id, match_id, set_number, team, delta, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", action.id, matchId, setNumber, action.team, action.delta, action.reason ?? null, now);
     const column = action.team === "home" ? "home_points" : "away_points";
     await db.runAsync(`UPDATE match_sets SET ${column} = ${column} + ? WHERE match_id = ? AND set_number = ?`, action.delta, matchId, setNumber);
+    const servingTeam = await db.getFirstAsync<{ team: "home" | "away" }>(
+      `SELECT team FROM set_alignment_state
+       WHERE match_id = ? AND set_number = ? AND is_serving = 1
+       LIMIT 1`,
+      matchId, setNumber,
+    );
+    if (servingTeam && servingTeam.team !== action.team) {
+      await applySideOutRotation(db, matchId, setNumber, action.team, now);
+    }
     const updatedSets = match.sets.map((set, index) => index === setNumber - 1 ? next : set);
     await syncMatchProgress(db, matchId, match.phase, updatedSets, now);
     await enqueueSyncOperation(db, `sync-${action.id}`, "match", matchId, "record_score_action", {
@@ -360,16 +798,79 @@ export async function recordAdministrativeCorrection(db: SQLiteDatabase, matchId
 
 // Records a no-show. Group phase: official 15-0, 15-0 for the team that showed up.
 // Knockout: the team that showed up advances (or is champion in the final) with no score.
-export async function recordWalkover(db: SQLiteDatabase, matchId: string, absentTeam: "home" | "away"): Promise<LiveMatchRecord> {
+export async function startWalkoverCall(
+  db: SQLiteDatabase,
+  matchId: string,
+  absentTeam: "home" | "away",
+  calledAt = new Date().toISOString(),
+): Promise<WalkoverRecord> {
+  const match = await db.getFirstAsync<{ status: Match["status"] }>(
+    "SELECT status FROM matches WHERE id = ?",
+    matchId,
+  );
+  if (!match) throw new Error("El partido no existe.");
+  if (match.status !== "scheduled") throw new Error("El llamado a cancha solo aplica antes de iniciar el partido.");
+  const waitDeadline = new Date(new Date(calledAt).getTime() + 10 * 60 * 1000).toISOString();
+  const id = `walkover-${matchId}`;
+  await db.runAsync(
+    `INSERT INTO walkover_events
+      (id, match_id, absent_team, called_at, wait_deadline, status, created_at)
+     VALUES (?, ?, ?, ?, ?, 'called', ?)`,
+    id, matchId, absentTeam, calledAt, waitDeadline, calledAt,
+  );
+  await enqueueSyncOperation(db, `walkover-call-${matchId}`, "walkover_event", id, "start_walkover_call", {
+    id, matchId, absentTeam, calledAt, waitDeadline, status: "called", createdAt: calledAt,
+  });
+  const record = await db.getFirstAsync<WalkoverRecord & {
+    match_id: string; absent_team: "home" | "away"; called_at: string; wait_deadline: string;
+    confirmed_at: string | null; referee_decision_by: string | null; referee_confirmed_at: string | null;
+    home_present_count: number | null; away_present_count: number | null; player_condition_note: string | null;
+  }>("SELECT id, match_id, absent_team, called_at, wait_deadline, confirmed_at, referee_decision_by, referee_confirmed_at, home_present_count, away_present_count, player_condition_note, status FROM walkover_events WHERE id = ?", id);
+  if (!record) throw new Error("No se pudo registrar el llamado a cancha.");
+  return {
+    id: record.id, matchId: record.match_id, absentTeam: record.absent_team, calledAt: record.called_at,
+    waitDeadline: record.wait_deadline, confirmedAt: record.confirmed_at, refereeDecisionBy: record.referee_decision_by,
+    refereeConfirmedAt: record.referee_confirmed_at, homePresentCount: record.home_present_count,
+    awayPresentCount: record.away_present_count, playerConditionNote: record.player_condition_note, status: record.status,
+  };
+}
+
+export async function confirmWalkover(
+  db: SQLiteDatabase,
+  matchId: string,
+  refereeDecisionBy: string,
+  homePresentCount: number,
+  awayPresentCount: number,
+  playerConditionNote: string,
+  confirmedAt = new Date().toISOString(),
+): Promise<LiveMatchRecord> {
+  if (!refereeDecisionBy.trim()) throw new Error("La confirmación requiere identificar al árbitro.");
+  if (!Number.isInteger(homePresentCount) || homePresentCount < 0 || !Number.isInteger(awayPresentCount) || awayPresentCount < 0) {
+    throw new Error("Registra cuántos jugadores están presentes en cada equipo.");
+  }
+  if (!playerConditionNote.trim()) throw new Error("Describe la condición de jugadores presentes; el Reglamento v6 no fija un mínimo numérico.");
   await db.execAsync("BEGIN TRANSACTION;");
   try {
     const match = await getLiveMatch(db, matchId);
     if (!match) throw new Error("El partido no existe.");
-    if (match.status !== "scheduled") throw new Error("Solo se puede registrar W.O. en un partido que no ha comenzado.");
-    const winner = absentTeam === "home" ? "away" : "home";
-    const absentTeamId = absentTeam === "home" ? match.homeTeamId : match.awayTeamId;
-    const now = new Date().toISOString();
+    if (match.status !== "scheduled") throw new Error("Solo se puede confirmar W.O. antes de iniciar el partido.");
+    const call = match.walkover;
+    if (!call) throw new Error("Primero registra el llamado a cancha.");
+    if (call.status !== "called") throw new Error("El llamado a cancha ya fue confirmado.");
+    if (new Date(confirmedAt).getTime() < new Date(call.waitDeadline).getTime()) {
+      throw new Error(`El plazo de espera termina a las ${new Date(call.waitDeadline).toLocaleTimeString()}.`);
+    }
+    const winner = call.absentTeam === "home" ? "away" : "home";
+    const absentTeamId = call.absentTeam === "home" ? match.homeTeamId : match.awayTeamId;
+    const now = confirmedAt;
     const sets = match.phase === "group" ? walkoverSets(winner) : [];
+    await db.runAsync(
+      `UPDATE walkover_events
+       SET confirmed_at = ?, referee_decision_by = ?, referee_confirmed_at = ?,
+           home_present_count = ?, away_present_count = ?, player_condition_note = ?, status = 'confirmed'
+       WHERE match_id = ?`,
+      now, refereeDecisionBy.trim(), now, homePresentCount, awayPresentCount, playerConditionNote.trim(), matchId,
+    );
     await db.runAsync("DELETE FROM match_sets WHERE match_id = ?", matchId);
     for (const [index, set] of sets.entries()) {
       await db.runAsync(
@@ -381,12 +882,20 @@ export async function recordWalkover(db: SQLiteDatabase, matchId: string, absent
       "UPDATE matches SET status = 'walkover', winner = ?, walkover_team_id = ?, current_set = ?, updated_at = ? WHERE id = ?",
       winner, absentTeamId, Math.max(sets.length, 1), now, matchId
     );
-    const operationId = `walkover-${matchId}`;
+    const operationId = `walkover-confirm-${matchId}`;
     await db.runAsync(
-      "INSERT INTO audit_log (id, entity_type, entity_id, action, details_json, created_at) VALUES (?, 'match', ?, 'walkover', ?, ?)",
-      `audit-${operationId}`, matchId, JSON.stringify({ absentTeamId, winner, sets }), now
+      "INSERT INTO audit_log (id, entity_type, entity_id, action, details_json, created_at) VALUES (?, 'match', ?, 'walkover_confirmed', ?, ?)",
+      `audit-${operationId}`, matchId, JSON.stringify({
+        absentTeamId, winner, sets, refereeDecisionBy: refereeDecisionBy.trim(),
+        confirmedAt: now, homePresentCount, awayPresentCount, playerConditionNote: playerConditionNote.trim(),
+      }), now
     );
-    await enqueueSyncOperation(db, `sync-${operationId}`, "match", matchId, "walkover", { absentTeamId, winner, sets, timestamp: now });
+    await enqueueSyncOperation(db, `sync-${operationId}`, "walkover_event", call.id, "confirm_walkover", {
+      id: call.id, matchId, absentTeam: call.absentTeam, calledAt: call.calledAt, waitDeadline: call.waitDeadline,
+      confirmedAt: now, refereeDecisionBy: refereeDecisionBy.trim(), refereeConfirmedAt: now,
+      homePresentCount, awayPresentCount, playerConditionNote: playerConditionNote.trim(), status: "confirmed",
+      winner, absentTeamId, sets, createdAt: call.calledAt,
+    });
     await db.execAsync("COMMIT;");
   } catch (error) {
     await db.execAsync("ROLLBACK;");
@@ -454,8 +963,18 @@ export async function saveTeam(
 ): Promise<void> {
   const now = new Date().toISOString();
 
-  await db.execAsync("BEGIN TRANSACTION;");
+  await db.execAsync("BEGIN IMMEDIATE TRANSACTION;");
   try {
+    const activeTeams = await db.getFirstAsync<{ count: number }>(
+      `SELECT COUNT(*) AS count
+       FROM teams
+       WHERE tournament_id = ? AND registration_status <> 'withdrawn' AND id <> ?`,
+      team.tournamentId,
+      team.id,
+    );
+    if (team.registrationStatus !== "withdrawn" && (activeTeams?.count ?? 0) >= TOURNAMENT_TEAM_COUNT) {
+      throw new Error(`El torneo ya alcanzó el máximo de ${TOURNAMENT_TEAM_COUNT} equipos.`);
+    }
     await db.runAsync(
       `INSERT INTO teams (
         id, tournament_id, name, registration_status,
@@ -501,6 +1020,8 @@ export async function listTeamRecords(db: SQLiteDatabase, tournamentId: string):
   return db.getAllAsync<TeamRecord>(
     `SELECT t.id, t.name, t.tournament_id AS tournamentId, t.captain_name AS captainName,
       t.contact, t.registration_status AS registrationStatus, t.payment_status AS paymentStatus,
+      t.initial_payment_status AS initialPaymentStatus, t.balance_payment_status AS balancePaymentStatus,
+      t.initial_payment_paid_at AS initialPaymentPaidAt, t.balance_payment_paid_at AS balancePaymentPaidAt,
       g.name AS groupId
      FROM teams t
      LEFT JOIN group_memberships gm ON gm.team_id = t.id
@@ -514,6 +1035,8 @@ export async function getTeamRecord(db: SQLiteDatabase, teamId: string): Promise
   const row = await db.getFirstAsync<TeamRecord>(
     `SELECT t.id, t.name, t.tournament_id AS tournamentId, t.captain_name AS captainName,
       t.contact, t.registration_status AS registrationStatus, t.payment_status AS paymentStatus,
+      t.initial_payment_status AS initialPaymentStatus, t.balance_payment_status AS balancePaymentStatus,
+      t.initial_payment_paid_at AS initialPaymentPaidAt, t.balance_payment_paid_at AS balancePaymentPaidAt,
       g.name AS groupId
      FROM teams t
      LEFT JOIN group_memberships gm ON gm.team_id = t.id
@@ -529,35 +1052,61 @@ export async function saveTeamRecord(
   db: SQLiteDatabase,
   team: Omit<TeamRecord, "groupId"> & {
     groupId?: "A" | "B" | null;
+    initialPaymentStatus?: PaymentStatus;
+    balancePaymentStatus?: PaymentStatus;
+    initialPaymentPaidAt?: string | null;
+    balancePaymentPaidAt?: string | null;
   }
 ): Promise<void> {
   if (!team.name.trim()) {
     throw new Error("El nombre del equipo es obligatorio.");
   }
 
-  // Checked explicitly: on web, expo-sqlite reports constraint errors without "UNIQUE" in the message
-  const sameName = await db.getFirstAsync<{ id: string }>(
-    "SELECT id FROM teams WHERE tournament_id = ? AND name = ? AND id <> ?",
-    team.tournamentId, team.name.trim(), team.id
-  );
-  if (sameName) throw new Error("Ya existe un equipo con ese nombre en este torneo.");
-
   const now = new Date().toISOString();
 
-  await db.execAsync("BEGIN TRANSACTION;");
+  await db.execAsync("BEGIN IMMEDIATE TRANSACTION;");
   try {
+    const sameName = await db.getFirstAsync<{ id: string }>(
+      "SELECT id FROM teams WHERE tournament_id = ? AND name = ? AND id <> ?",
+      team.tournamentId,
+      team.name.trim(),
+      team.id,
+    );
+    if (sameName) throw new Error("Ya existe un equipo con ese nombre en este torneo.");
+
+    const activeTeams = await db.getFirstAsync<{ count: number }>(
+      `SELECT COUNT(*) AS count
+       FROM teams
+       WHERE tournament_id = ? AND registration_status <> 'withdrawn' AND id <> ?`,
+      team.tournamentId,
+      team.id,
+    );
+    if (team.registrationStatus !== "withdrawn" && (activeTeams?.count ?? 0) >= TOURNAMENT_TEAM_COUNT) {
+      throw new Error(`El torneo ya alcanzó el máximo de ${TOURNAMENT_TEAM_COUNT} equipos.`);
+    }
+
+    const initialPaymentStatus = team.initialPaymentStatus ?? (team.paymentStatus === "paid" ? "paid" : "pending");
+    const balancePaymentStatus = team.balancePaymentStatus ?? (team.paymentStatus === "paid" ? "paid" : "pending");
+    const initialPaymentPaidAt = initialPaymentStatus === "paid" ? (team.initialPaymentPaidAt ?? now) : null;
+    const balancePaymentPaidAt = balancePaymentStatus === "paid" ? (team.balancePaymentPaidAt ?? now) : null;
+    const paymentStatus = initialPaymentStatus === "paid" && balancePaymentStatus === "paid" ? "paid" : "pending";
     await db.runAsync(
       `INSERT INTO teams (
         id, tournament_id, name, captain_name, contact,
-        registration_status, payment_status, created_at, updated_at
+        registration_status, payment_status, initial_payment_status, balance_payment_status,
+        initial_payment_paid_at, balance_payment_paid_at, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         captain_name = excluded.captain_name,
         contact = excluded.contact,
         registration_status = excluded.registration_status,
         payment_status = excluded.payment_status,
+        initial_payment_status = excluded.initial_payment_status,
+        balance_payment_status = excluded.balance_payment_status,
+        initial_payment_paid_at = excluded.initial_payment_paid_at,
+        balance_payment_paid_at = excluded.balance_payment_paid_at,
         updated_at = excluded.updated_at`,
       team.id,
       team.tournamentId,
@@ -565,7 +1114,11 @@ export async function saveTeamRecord(
       team.captainName,
       team.contact,
       team.registrationStatus,
-      team.paymentStatus,
+      paymentStatus,
+      initialPaymentStatus,
+      balancePaymentStatus,
+      initialPaymentPaidAt,
+      balancePaymentPaidAt,
       now,
       now
     );
@@ -582,7 +1135,11 @@ export async function saveTeamRecord(
         captainName: team.captainName,
         contact: team.contact,
         registrationStatus: team.registrationStatus,
-        paymentStatus: team.paymentStatus,
+        paymentStatus,
+        initialPaymentStatus,
+        balancePaymentStatus,
+        initialPaymentPaidAt,
+        balancePaymentPaidAt,
       }
     );
 
@@ -637,24 +1194,36 @@ export async function savePlayer(
   db: SQLiteDatabase,
   player: PlayerRecord
 ): Promise<void> {
-  if (!player.name.trim()) throw new Error("El nombre del jugador es obligatorio.");
-  const activeDuplicate = await db.getFirstAsync<{ id: string }>(
-    "SELECT id FROM players WHERE lower(name) = lower(?) AND id <> ? AND eligibility_status <> 'ineligible'",
-    player.name.trim(), player.id
-  );
-  if (activeDuplicate) {
-    throw new Error("Este jugador ya está registrado en otra plantilla activa y requiere revisión administrativa.");
-  }
-  if (player.jerseyNumber !== null) {
+  validatePlayerRegistration(player.name, player.jerseyNumber);
+  const now = new Date().toISOString();
+  await db.execAsync("BEGIN IMMEDIATE TRANSACTION;");
+  try {
+    const activeDuplicate = await db.getFirstAsync<{ id: string }>(
+      "SELECT id FROM players WHERE lower(name) = lower(?) AND id <> ? AND eligibility_status <> 'ineligible'",
+      player.name.trim(),
+      player.id,
+    );
+    if (activeDuplicate) {
+      throw new Error("Este jugador ya está registrado en otra plantilla activa y requiere revisión administrativa.");
+    }
+
+    const teamPlayers = await db.getFirstAsync<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM players WHERE team_id = ? AND id <> ?",
+      player.teamId,
+      player.id,
+    );
+    if ((teamPlayers?.count ?? 0) >= MAX_TEAM_PLAYERS) {
+      throw new Error(`El equipo ya alcanzó el máximo de ${MAX_TEAM_PLAYERS} jugadores.`);
+    }
+
     const jerseyTaken = await db.getFirstAsync<{ id: string }>(
       "SELECT id FROM players WHERE team_id = ? AND jersey_number = ? AND id <> ?",
-      player.teamId, player.jerseyNumber, player.id
+      player.teamId,
+      player.jerseyNumber,
+      player.id,
     );
     if (jerseyTaken) throw new Error(`El número ${player.jerseyNumber} ya lo usa otro jugador del equipo.`);
-  }
-  const now = new Date().toISOString();
-  await db.execAsync("BEGIN TRANSACTION;");
-  try {
+
     // Editing a player never resets eligibility; that only changes through updatePlayerEligibility
     await db.runAsync(
       `INSERT INTO players (id, team_id, name, gender, jersey_number, eligibility_status, created_at, updated_at)
@@ -689,31 +1258,57 @@ async function enqueuePlayerSync(db: SQLiteDatabase, playerId: string): Promise<
 export async function updateTeamStatus(
   db: SQLiteDatabase,
   teamId: string,
-  changes: { paymentStatus?: TeamRecord["paymentStatus"]; registrationStatus?: TeamRecord["registrationStatus"] }
+  changes: {
+    paymentStatus?: TeamRecord["paymentStatus"];
+    initialPaymentStatus?: PaymentStatus;
+    balancePaymentStatus?: PaymentStatus;
+    registrationStatus?: TeamRecord["registrationStatus"];
+  }
 ): Promise<void> {
   const current = await getTeamRecord(db, teamId);
   if (!current) throw new Error("El equipo no existe.");
+  const initialPaymentStatus = changes.initialPaymentStatus ?? (changes.paymentStatus ?? current.paymentStatus);
+  const balancePaymentStatus = changes.balancePaymentStatus ?? (changes.paymentStatus ?? current.paymentStatus);
   const next = {
-    paymentStatus: changes.paymentStatus ?? current.paymentStatus,
+    initialPaymentStatus,
+    balancePaymentStatus,
+    paymentStatus: initialPaymentStatus === "paid" && balancePaymentStatus === "paid" ? "paid" : "pending",
     registrationStatus: changes.registrationStatus ?? current.registrationStatus,
   };
   const now = new Date().toISOString();
   await db.execAsync("BEGIN TRANSACTION;");
   try {
     await db.runAsync(
-      "UPDATE teams SET payment_status = ?, registration_status = ?, updated_at = ? WHERE id = ?",
-      next.paymentStatus, next.registrationStatus, now, teamId
+      `UPDATE teams
+       SET payment_status = ?, initial_payment_status = ?, balance_payment_status = ?,
+           initial_payment_paid_at = CASE WHEN ? = 'paid' THEN COALESCE(initial_payment_paid_at, ?) ELSE NULL END,
+           balance_payment_paid_at = CASE WHEN ? = 'paid' THEN COALESCE(balance_payment_paid_at, ?) ELSE NULL END,
+           registration_status = ?, updated_at = ?
+       WHERE id = ?`,
+      next.paymentStatus, next.initialPaymentStatus, next.balancePaymentStatus,
+      next.initialPaymentStatus, now, next.balancePaymentStatus, now,
+      next.registrationStatus, now, teamId
     );
     await db.runAsync(
       "INSERT INTO audit_log (id, entity_type, entity_id, action, details_json, created_at) VALUES (?, 'team', ?, 'status_change', ?, ?)",
       `audit-team-${teamId}-${Date.now()}`, teamId,
-      JSON.stringify({ previous: { paymentStatus: current.paymentStatus, registrationStatus: current.registrationStatus }, next }), now
+      JSON.stringify({
+        previous: {
+          paymentStatus: current.paymentStatus,
+          initialPaymentStatus: current.initialPaymentStatus,
+          balancePaymentStatus: current.balancePaymentStatus,
+          registrationStatus: current.registrationStatus,
+        },
+        next,
+      }), now
     );
     await enqueueSyncOperation(db, `sync-team-${teamId}-${Date.now()}`, "team", teamId, "save_team", {
       tournamentId: current.tournamentId,
       name: current.name,
       captainName: current.captainName,
       contact: current.contact,
+      initialPaymentPaidAt: next.initialPaymentStatus === "paid" ? (current.initialPaymentPaidAt ?? now) : null,
+      balancePaymentPaidAt: next.balancePaymentStatus === "paid" ? (current.balancePaymentPaidAt ?? now) : null,
       ...next,
     });
     await db.execAsync("COMMIT;");

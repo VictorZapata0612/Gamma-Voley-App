@@ -17,12 +17,16 @@ type RemoteTeam = {
   contact: string | null;
   registration_status: TeamRecord["registrationStatus"];
   payment_status: TeamRecord["paymentStatus"];
+  initial_payment_status: TeamRecord["initialPaymentStatus"];
+  balance_payment_status: TeamRecord["balancePaymentStatus"];
+  initial_payment_paid_at: string | null;
+  balance_payment_paid_at: string | null;
 };
 
 async function loadWebTeams(): Promise<TeamRecord[]> {
   const { data, error } = await supabase
     .from("teams")
-    .select("id, tournament_id, name, captain_name, contact, registration_status, payment_status")
+    .select("id, tournament_id, name, captain_name, contact, registration_status, payment_status, initial_payment_status, balance_payment_status, initial_payment_paid_at, balance_payment_paid_at")
     .eq("tournament_id", DEFAULT_TOURNAMENT_ID)
     .order("name");
 
@@ -36,6 +40,10 @@ async function loadWebTeams(): Promise<TeamRecord[]> {
     contact: team.contact,
     registrationStatus: team.registration_status,
     paymentStatus: team.payment_status,
+    initialPaymentStatus: team.initial_payment_status,
+    balancePaymentStatus: team.balance_payment_status,
+    initialPaymentPaidAt: team.initial_payment_paid_at,
+    balancePaymentPaidAt: team.balance_payment_paid_at,
   }));
 }
 

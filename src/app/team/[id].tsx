@@ -12,6 +12,7 @@ import {
   type TeamRecord,
 } from "@/database/repositories";
 import { goBack } from "@/utils/navigation";
+import { MAX_TEAM_PLAYERS } from "@/domain/registration";
 
 const NEXT_ELIGIBILITY: Record<PlayerRecord["eligibility"], PlayerRecord["eligibility"]> = {
   pending_review: "eligible",
@@ -28,6 +29,7 @@ export default function TeamDetailScreen() {
   const [players, setPlayers] = useState<PlayerRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const isPlayerLimitReached = players.length >= MAX_TEAM_PLAYERS;
 
   const load = useCallback(async () => {
     if (!teamId) {
@@ -79,9 +81,10 @@ export default function TeamDetailScreen() {
   );
 
   // Status changes go through the audited repository update
-  async function togglePaymentStatus() {
+  async function togglePaymentStatus(concept: "initial" | "balance") {
     if (!team) return;
-    await changeTeamStatus({ paymentStatus: team.paymentStatus === "paid" ? "pending" : "paid" });
+    const key = concept === "initial" ? "initialPaymentStatus" : "balancePaymentStatus";
+    await changeTeamStatus({ [key]: team[key] === "paid" ? "pending" : "paid" });
   }
 
   async function toggleRegistrationStatus() {
@@ -163,23 +166,41 @@ export default function TeamDetailScreen() {
           {/* Estado de Pago e Inscripción Interactivo */}
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
-              <Text style={styles.metaLabel}>Cuota Inscripción ($150.000 COP)</Text>
+              <Text style={styles.metaLabel}>Abono inicial ($75.000 COP · no reembolsable)</Text>
               <Pressable
-                onPress={() => void togglePaymentStatus()}
+                onPress={() => void togglePaymentStatus("initial")}
                 style={({ pressed }) => [
                   styles.statusBadge,
-                  team.paymentStatus === "paid" ? styles.badgePaid : styles.badgePending,
+                  team.initialPaymentStatus === "paid" ? styles.badgePaid : styles.badgePending,
                   pressed && styles.pressed,
                 ]}
               >
                 <Text style={styles.statusBadgeText}>
-                  {team.paymentStatus === "paid" ? "✓ Pagado ($150.000)" : "⏳ Pendiente de pago (Toca para marcar pagado)"}
+                  {team.initialPaymentStatus === "paid" ? "✓ Pagado el " + (team.initialPaymentPaidAt ? new Date(team.initialPaymentPaidAt).toLocaleDateString() : "") : "⏳ Pendiente (toca para registrar)"}
                 </Text>
               </Pressable>
             </View>
           </View>
 
           <View style={{ height: 10 }} />
+
+          <View style={styles.metaRow}>
+            <View style={styles.metaItem}>
+              <Text style={styles.metaLabel}>Saldo ($75.000 COP)</Text>
+              <Pressable
+                onPress={() => void togglePaymentStatus("balance")}
+                style={({ pressed }) => [
+                  styles.statusBadge,
+                  team.balancePaymentStatus === "paid" ? styles.badgePaid : styles.badgePending,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.statusBadgeText}>
+                  {team.balancePaymentStatus === "paid" ? "✓ Pagado el " + (team.balancePaymentPaidAt ? new Date(team.balancePaymentPaidAt).toLocaleDateString() : "") : "⚠ Debe pagarse antes del primer partido"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
 
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
@@ -249,14 +270,15 @@ export default function TeamDetailScreen() {
           <View>
             <Text style={styles.sectionTitle}>Nómina de Jugadores</Text>
             <Text style={styles.sectionSub}>
-              {eligibleCount} elegibles · {pendingReviewCount} pendientes de revisión
+              {players.length}/{MAX_TEAM_PLAYERS} jugadores · {eligibleCount} elegibles · {pendingReviewCount} pendientes de revisión
             </Text>
           </View>
           <Pressable
+            disabled={isPlayerLimitReached}
             onPress={() => router.push({ pathname: "/player-form", params: { teamId: team.id } })}
-            style={styles.addButton}
+            style={[styles.addButton, isPlayerLimitReached && styles.disabledButton]}
           >
-            <Text style={styles.addButtonText}>+ Inscribir</Text>
+            <Text style={styles.addButtonText}>{isPlayerLimitReached ? "Cupo completo" : "+ Inscribir"}</Text>
           </Pressable>
         </View>
 
@@ -456,6 +478,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 8,
   },
+  disabledButton: { opacity: 0.45, backgroundColor: "#30323A" },
   addButtonText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
 
   emptyCard: {

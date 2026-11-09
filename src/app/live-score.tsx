@@ -4,14 +4,22 @@ import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, Vibra
 import { useSQLiteContext } from "expo-sqlite";
 import {
   getLiveMatch,
+  listEligiblePlayersForMatch,
+  recordRotationFault,
+  recordSubstitution,
   recordAdministrativeCorrection,
   recordLiveScoreAction,
   recordMatchTimeout,
+  startWalkoverCall,
+  confirmWalkover,
+  saveSetLineup,
   type LiveMatchRecord,
+  type PlayerRecord,
   type ScoreEventRecord,
 } from "@/database/repositories";
+import type { CourtPosition, LineupPlayer } from "@/domain/alignment";
 import { triggerImmediateSync } from "@/services/immediateSync";
-import { isSetClosed } from "@/domain/rules";
+import { isSetClosed, toDisplaySetScore } from "@/domain/rules";
 import { useMatchRealtime } from "@/hooks/useMatchRealtime";
 import type { MatchRealtimeStatus } from "@/services/realtime";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
@@ -67,6 +75,25 @@ export default function LiveScoreScreen() {
   // Estados del Temporizador de Tiempo Muerto (30 segundos)
   const [timeoutSeconds, setTimeoutSeconds] = useState<number | null>(null);
   const [activeTimeoutTeam, setActiveTimeoutTeam] = useState<string | null>(null);
+  const [eligiblePlayers, setEligiblePlayers] = useState<{ home: PlayerRecord[]; away: PlayerRecord[] }>({ home: [], away: [] });
+  const [lineupDraft, setLineupDraft] = useState<{ home: string[]; away: string[] }>({ home: [], away: [] });
+  const [serverPositions, setServerPositions] = useState<{ home: CourtPosition; away: CourtPosition }>({ home: 1, away: 1 });
+  const [initialServingTeam, setInitialServingTeam] = useState<"home" | "away">("home");
+  const [faultMode, setFaultMode] = useState(false);
+  const [faultTeam, setFaultTeam] = useState<"home" | "away">("home");
+  const [faultPosition, setFaultPosition] = useState("");
+  const [faultServer, setFaultServer] = useState("");
+  const [faultSanction, setFaultSanction] = useState("");
+  const [faultReason, setFaultReason] = useState("");
+  const [courtExpanded, setCourtExpanded] = useState(false);
+  const [rotationPulse, setRotationPulse] = useState<string | null>(null);
+  const [substitutionTarget, setSubstitutionTarget] = useState<{ team: "home" | "away"; playerId: string } | null>(null);
+  const [walkoverAbsentTeam, setWalkoverAbsentTeam] = useState<"home" | "away">("home");
+  const [refereeName, setRefereeName] = useState("");
+  const [homePresentCount, setHomePresentCount] = useState("");
+  const [awayPresentCount, setAwayPresentCount] = useState("");
+  const [playerConditionNote, setPlayerConditionNote] = useState("");
+  const [walkoverNow, setWalkoverNow] = useState(0);
 
   const load = useCallback(async () => {
     if (!matchId) {
@@ -77,6 +104,19 @@ export default function LiveScoreScreen() {
       await hydrateDefaultTournament(db);
       const data = await getLiveMatch(db, matchId);
       setMatch(data);
+      if (data) {
+        const [home, away] = await Promise.all([
+          listEligiblePlayersForMatch(db, data.id, "home"),
+          listEligiblePlayersForMatch(db, data.id, "away"),
+        ]);
+        setEligiblePlayers({ home, away });
+        if (data.alignments.length === 0) {
+          setLineupDraft({
+            home: home.slice(0, 6).map((player) => player.id),
+            away: away.slice(0, 6).map((player) => player.id),
+          });
+        }
+      }
       setError(null);
       if (!data) {
         setError("No se encontró el partido en el torneo sincronizado.");
@@ -122,6 +162,41 @@ export default function LiveScoreScreen() {
     return () => clearInterval(timer);
   }, [timeoutSeconds]);
 
+  useEffect(() => {
+    if (!match?.walkover || match.walkover.status !== "called") return;
+    const timer = setInterval(() => setWalkoverNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [match?.walkover]);
+
+  async function callToCourt() {
+    if (!match) return;
+    try {
+      await startWalkoverCall(db, match.id, walkoverAbsentTeam);
+      void triggerImmediateSync(db);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo registrar el llamado a cancha.");
+    }
+  }
+
+  async function confirmMatchWalkover() {
+    if (!match) return;
+    try {
+      await confirmWalkover(
+        db,
+        match.id,
+        refereeName,
+        Number(homePresentCount),
+        Number(awayPresentCount),
+        playerConditionNote,
+      );
+      void triggerImmediateSync(db);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo confirmar el W.O.");
+    }
+  }
+
   async function change(team: "home" | "away", delta: 1 | -1) {
     if (!match) return;
     if (delta < 0 && !reason.trim()) {
@@ -140,7 +215,12 @@ export default function LiveScoreScreen() {
       if (correctionMode && delta < 0) {
         await recordAdministrativeCorrection(db, match.id, action);
       } else {
+        const wasSideOut = match.alignments.some((alignment) => alignment.isServing && alignment.team !== team);
         await recordLiveScoreAction(db, match.id, action);
+        if (wasSideOut) {
+          setRotationPulse(`${team}-${Date.now()}`);
+          setTimeout(() => setRotationPulse(null), 1800);
+        }
       }
       
       // Sincronizar automáticamente en segundo plano con Supabase
@@ -178,6 +258,67 @@ export default function LiveScoreScreen() {
     }
   }
 
+  function cycleDraftPlayer(team: "home" | "away", position: number) {
+      const players = eligiblePlayers[team];
+      if (players.length === 0) return;
+      setLineupDraft((current) => {
+        const next = [...current[team]];
+        const currentIndex = players.findIndex((player) => player.id === next[position - 1]);
+        next[position - 1] = players[(currentIndex + 1) % players.length]?.id ?? players[0].id;
+        return { ...current, [team]: next };
+      });
+    }
+
+  async function saveLineups() {
+      if (!match) return;
+      try {
+        const setNumber = match.currentSet;
+        const makeLineup = (team: "home" | "away"): LineupPlayer[] =>
+          lineupDraft[team].map((playerId, index) => ({ playerId, position: (index + 1) as CourtPosition }));
+        await saveSetLineup(db, match.id, setNumber, "home", makeLineup("home"), serverPositions.home, initialServingTeam === "home");
+        await saveSetLineup(db, match.id, setNumber, "away", makeLineup("away"), serverPositions.away, initialServingTeam === "away");
+        void triggerImmediateSync(db);
+        setError(null);
+        void load();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "No se pudo guardar la alineación.");
+      }
+    }
+
+  async function saveFault() {
+      if (!match) return;
+      const position = faultPosition.trim() ? Number(faultPosition) : null;
+      if (position !== null && (!Number.isInteger(position) || position < 1 || position > 6)) {
+        setError("La posición incorrecta debe estar entre 1 y 6.");
+        return;
+      }
+      try {
+        await recordRotationFault(db, match.id, match.currentSet, faultTeam, faultServer.trim() || null, position as CourtPosition | null, faultSanction, faultReason);
+        void triggerImmediateSync(db);
+        setFaultMode(false);
+        setFaultPosition("");
+        setFaultServer("");
+        setFaultSanction("");
+        setFaultReason("");
+        setError(null);
+        void load();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "No se pudo registrar la falta de rotación.");
+      }
+    }
+
+    async function substitute(team: "home" | "away", playerOutId: string, playerInId: string) {
+      if (!match) return;
+      try {
+        await recordSubstitution(db, match.id, match.currentSet, team, playerOutId, playerInId);
+        setSubstitutionTarget(null);
+        void triggerImmediateSync(db);
+        setError(null);
+        void load();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "No se pudo registrar la sustitución.");
+      }
+    }
   if (!match) {
     return (
       <SafeAreaView style={styles.safe}>
@@ -192,7 +333,11 @@ export default function LiveScoreScreen() {
   }
 
   const currentSetData = match.sets[match.currentSet - 1] ?? { home: 0, away: 0 };
+  const isProlongation = match.phase === "group" && match.currentSet === 3;
+  const currentSetLabel = isProlongation ? "Prolongación del set 2" : `Set ${match.currentSet}`;
+  const displayedCurrentSetData = toDisplaySetScore(match.phase, match.currentSet, currentSetData);
   const closed = match.status === "completed" || match.status === "walkover";
+  const hasCurrentAlignment = match.alignments.length === 2;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -247,10 +392,10 @@ export default function LiveScoreScreen() {
         )}
 
         {/* Tablero Principal de Puntuación */}
-        <View style={styles.scoreboard}>
+        <View style={[styles.scoreboard, !hasCurrentAlignment && styles.scoreboardLockedCard]}>
           <View style={styles.setBanner}>
             <Text style={styles.setText}>
-              {closed ? "PARTIDO FINALIZADO" : `SET ${match.currentSet} EN JUEGO`}
+              {closed ? "PARTIDO FINALIZADO" : `${currentSetLabel.toUpperCase()} EN JUEGO`}
             </Text>
             {match.winner ? (
               <Text style={styles.winnerTag}>
@@ -258,18 +403,189 @@ export default function LiveScoreScreen() {
               </Text>
             ) : null}
           </View>
+          {!hasCurrentAlignment && !closed && (
+            <View style={styles.scoreboardLocked}>
+              <Text style={styles.scoreboardLockedTitle}>MARCADOR EN ESPERA</Text>
+              <Text style={styles.scoreboardLockedText}>Confirma las dos alineaciones para habilitar los puntos.</Text>
+            </View>
+          )}
+
+          {!closed && !hasCurrentAlignment && (
+            <View style={styles.setupFocus}>
+              <Text style={styles.setupKicker}>{currentSetLabel.toUpperCase()} · PREPARACIÓN</Text>
+              <Text style={styles.setupTitle}>Configura la cancha antes de iniciar</Text>
+              <Text style={styles.alignmentHint}>Toca una posición para cambiar el jugador. El marcador se habilita al confirmar ambos equipos.</Text>
+              {(["home", "away"] as const).map((team) => (
+                <View key={team} style={styles.setupTeam}>
+                  <View style={styles.setupTeamHeader}>
+                    <Text style={styles.teamName}>{team === "home" ? match.homeName : match.awayName}</Text>
+                    <Text style={styles.setupTeamStatus}>{lineupDraft[team].filter(Boolean).length}/6</Text>
+                  </View>
+                  <View style={styles.courtDiagram}>
+                    <View style={styles.courtRow}>
+                      {[4, 3, 2].map((position) => {
+                        const player = eligiblePlayers[team].find((item) => item.id === lineupDraft[team][position - 1]);
+                        return (
+                          <Pressable key={position} onPress={() => cycleDraftPlayer(team, position)} style={styles.courtSelector}>
+                            <Text style={styles.courtPosition}>P{position}</Text>
+                            <Text style={styles.courtJersey}>{player?.jerseyNumber ?? "—"}</Text>
+                            <Text style={styles.courtPlayer} numberOfLines={1}>{player?.name ?? "Seleccionar"}</Text>
+                            <Text style={styles.selectorHint}>CAMBIAR</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                    <View style={styles.netLine}><Text style={styles.netLabel}>RED</Text></View>
+                    <View style={styles.courtRow}>
+                      {[5, 6, 1].map((position) => {
+                        const player = eligiblePlayers[team].find((item) => item.id === lineupDraft[team][position - 1]);
+                        return (
+                          <Pressable key={position} onPress={() => cycleDraftPlayer(team, position)} style={[styles.courtSelector, position === 1 && styles.p1Selector]}>
+                            <Text style={styles.courtPosition}>P{position}</Text>
+                            <Text style={styles.courtJersey}>{player?.jerseyNumber ?? "—"}</Text>
+                            <Text style={styles.courtPlayer} numberOfLines={1}>{player?.name ?? "Seleccionar"}</Text>
+                            <Text style={styles.selectorHint}>CAMBIAR</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                  <View style={styles.inlineActions}>
+                    <Text style={styles.controlLabel}>SERVIDOR INICIAL</Text>
+                    {([1, 2, 3, 4, 5, 6] as const).map((position) => (
+                      <Pressable key={position} onPress={() => setServerPositions((current) => ({ ...current, [team]: position }))} style={[styles.compactChoice, serverPositions[team] === position && styles.compactChoiceActive]}>
+                        <Text style={styles.positionBtnText}>{position}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <Text style={styles.controlNote}>
+                    P1: {eligiblePlayers[team].find((player) => player.id === lineupDraft[team][0])?.name ?? "Sin jugador"} · Servidor: {eligiblePlayers[team].find((player) => player.id === lineupDraft[team][serverPositions[team] - 1])?.name ?? "Sin jugador"}
+                  </Text>
+                </View>
+              ))}
+              <Text style={styles.controlLabel}>INICIA EL SAQUE</Text>
+              <View style={styles.inlineActions}>
+                {(["home", "away"] as const).map((team) => (
+                  <Pressable key={team} onPress={() => setInitialServingTeam(team)} style={[styles.servingTeamBtn, initialServingTeam === team && styles.positionBtnActive]}>
+                    <Text style={styles.positionBtnText}>{team === "home" ? match.homeName : match.awayName}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Pressable onPress={() => void saveLineups()} style={styles.primaryAction}>
+                <Text style={styles.primaryActionText}>Confirmar alineaciones y abrir marcador</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {hasCurrentAlignment && (
+            <View style={styles.alignmentSummary}>
+              <View style={styles.summaryHeader}>
+                <View>
+                  <Text style={styles.sectionTitle}>Alineación · {currentSetLabel}</Text>
+                  <Text style={styles.summarySubline}>Servidor y estado de recepción</Text>
+                </View>
+                <Pressable onPress={() => setCourtExpanded(!courtExpanded)} style={styles.expandButton}>
+                  <Text style={styles.expandButtonText}>{courtExpanded ? "PLEGAR" : "VER CANCHA"}</Text>
+                </Pressable>
+              </View>
+              {rotationPulse && <View style={styles.rotationPulse}><Text style={styles.rotationPulseText}>↻ ROTACIÓN ACTUALIZADA · Nuevo servidor</Text></View>}
+              {match.alignments.map((alignment) => (
+                <View key={alignment.team} style={styles.lineupTeam}>
+                  <Text style={styles.summaryTeamName}>{alignment.team === "home" ? match.homeName : match.awayName}</Text>
+                  <Text style={[styles.serverLabel, alignment.isServing ? styles.summaryServeActive : styles.summaryReceive]}>
+                    {alignment.isServing ? "● SERVIDOR ACTUAL" : "○ recibe"} · P{alignment.serverPosition} · {alignment.players.find((player) => player.isServer)?.playerName ?? "sin servidor"}
+                  </Text>
+                  {courtExpanded && <View style={styles.courtDiagram}>
+                    <View style={styles.courtRow}>
+                      {[4, 3, 2].map((position) => {
+                        const player = alignment.players.find((item) => item.position === position);
+                        return <View key={position} style={[styles.courtSelector, player?.isServer && styles.serverCell]}><Text style={styles.courtPosition}>P{position}</Text><Text style={styles.courtJersey}>{player?.jerseyNumber ?? "—"}</Text><Text style={styles.courtPlayer} numberOfLines={1}>{player?.playerName ?? "Sin jugador"}</Text>{player?.isServer && <Text style={styles.serverMark}>SAQUE</Text>}</View>;
+                      })}
+                    </View>
+                    <View style={styles.netLine}><Text style={styles.netLabel}>RED</Text></View>
+                    <View style={styles.courtRow}>
+                      {[5, 6, 1].map((position) => {
+                        const player = alignment.players.find((item) => item.position === position);
+                        return <View key={position} style={[styles.courtSelector, position === 1 && styles.p1Selector, player?.isServer && styles.serverCell]}><Text style={styles.courtPosition}>P{position}</Text><Text style={styles.courtJersey}>{player?.jerseyNumber ?? "—"}</Text><Text style={styles.courtPlayer} numberOfLines={1}>{player?.playerName ?? "Sin jugador"}</Text>{player?.isServer && <Text style={styles.serverMark}>SAQUE</Text>}</View>;
+                      })}
+                    </View>
+                  </View>}
+                  <Text style={styles.alignmentHint}>Toca un jugador para sustituirlo por cualquier inscrito elegible</Text>
+                  <View style={styles.inlineActions}>
+                    {alignment.players.map((player) => (
+                      <Pressable
+                        key={player.playerId}
+                        onPress={() => setSubstitutionTarget({ team: alignment.team, playerId: player.playerId })}
+                        style={styles.positionBtn}
+                      >
+                        <Text style={styles.positionBtnText}>P{player.position} · {player.playerName}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  {substitutionTarget?.team === alignment.team && (
+                    <View style={styles.faultForm}>
+                      <Text style={styles.alignmentHint}>Selecciona el jugador entrante; conservará la posición del saliente</Text>
+                      <View style={styles.inlineActions}>
+                        {eligiblePlayers[alignment.team]
+                          .filter((player) => !alignment.players.some((active) => active.playerId === player.id))
+                          .map((player) => (
+                            <Pressable
+                              key={player.id}
+                              onPress={() => void substitute(alignment.team, substitutionTarget.playerId, player.id)}
+                              style={styles.servingTeamBtn}
+                            >
+                              <Text style={styles.positionBtnText}>{player.name}</Text>
+                            </Pressable>
+                          ))}
+                      </View>
+                    </View>
+                  )}
+                </View>
+              ))}
+              <Pressable onPress={() => setFaultMode(!faultMode)} style={styles.faultAction}>
+                <Text style={styles.faultActionText}>{faultMode ? "Cerrar registro de falta" : "Registrar falta de rotación"}</Text>
+              </Pressable>
+              {faultMode && (
+                <View style={styles.faultForm}>
+                  <Text style={styles.alignmentHint}>Equipo con falta</Text>
+                  <View style={styles.inlineActions}>
+                    {(["home", "away"] as const).map((team) => (
+                      <Pressable key={team} onPress={() => setFaultTeam(team)} style={[styles.servingTeamBtn, faultTeam === team && styles.positionBtnActive]}>
+                        <Text style={styles.positionBtnText}>{team === "home" ? match.homeName : match.awayName}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <TextInput style={styles.reasonInput} placeholder="Servidor incorrecto (ID o camiseta)" placeholderTextColor="#70737C" value={faultServer} onChangeText={setFaultServer} />
+                  <TextInput style={styles.reasonInput} placeholder="Posición incorrecta (1-6)" placeholderTextColor="#70737C" keyboardType="number-pad" value={faultPosition} onChangeText={setFaultPosition} />
+                  <TextInput style={styles.reasonInput} placeholder="Sanción aplicada" placeholderTextColor="#70737C" value={faultSanction} onChangeText={setFaultSanction} />
+                  <TextInput style={styles.reasonInput} placeholder="Motivo / observación" placeholderTextColor="#70737C" value={faultReason} onChangeText={setFaultReason} />
+                  <Pressable onPress={() => void saveFault()} style={styles.primaryAction}><Text style={styles.primaryActionText}>Guardar falta como evento corregible</Text></Pressable>
+                </View>
+              )}
+              {match.rotationFaults.length > 0 && (
+                <View style={styles.faultHistory}>
+                  <Text style={styles.alignmentHint}>Faltas registradas en este partido</Text>
+                  {match.rotationFaults.slice(0, 5).map((fault) => (
+                    <Text key={fault.id} style={styles.historyReason}>
+                      {match.phase === "group" && fault.setNumber === 3 ? "Prolongación del set 2" : `Set ${fault.setNumber}`} · {fault.team === "home" ? match.homeName : match.awayName} · P{fault.incorrectPosition ?? "?"} · {fault.sanction}
+                    </Text>
+                  ))}
+                </View>
+              )}
+            </View>
+          )}
 
           <View style={styles.teamsRow}>
             {/* Equipo Local */}
             <View style={styles.teamCol}>
               <Text style={styles.teamName} numberOfLines={1}>{match.homeName}</Text>
-              <Text style={styles.scoreNumber}>{currentSetData.home}</Text>
+              <Text style={styles.scoreNumber}>{displayedCurrentSetData.home}</Text>
 
               {!closed && (
                 <View style={styles.controlsRow}>
                   <Pressable
                     onPress={() => void change("home", 1)}
-                    disabled={!canAddPoint}
+                    disabled={!canAddPoint || !hasCurrentAlignment}
                     style={({ pressed }) => [styles.scoreBtn, styles.scoreBtnPlus, pressed && styles.pressed]}
                   >
                     <Text style={styles.scoreBtnText}>+1</Text>
@@ -289,13 +605,13 @@ export default function LiveScoreScreen() {
             {/* Equipo Visitante */}
             <View style={styles.teamCol}>
               <Text style={styles.teamName} numberOfLines={1}>{match.awayName}</Text>
-              <Text style={styles.scoreNumber}>{currentSetData.away}</Text>
+              <Text style={styles.scoreNumber}>{displayedCurrentSetData.away}</Text>
 
               {!closed && (
                 <View style={styles.controlsRow}>
                   <Pressable
                     onPress={() => void change("away", 1)}
-                    disabled={!canAddPoint}
+                    disabled={!canAddPoint || !hasCurrentAlignment}
                     style={({ pressed }) => [styles.scoreBtn, styles.scoreBtnPlus, pressed && styles.pressed]}
                   >
                     <Text style={styles.scoreBtnText}>+1</Text>
@@ -324,20 +640,83 @@ export default function LiveScoreScreen() {
                   idx + 1 === match.currentSet && styles.setCardActive,
                 ]}
               >
-                <Text style={styles.setCardNum}>Set {idx + 1}</Text>
+                <Text style={styles.setCardNum}>
+                  {match.phase === "group" && idx + 1 === 3 ? "Prolongación del set 2" : `Set ${idx + 1}`}
+                </Text>
                 <Text style={styles.setCardScore}>
-                  {s.home} - {s.away}
+                  {toDisplaySetScore(match.phase, idx + 1, s).home} - {toDisplaySetScore(match.phase, idx + 1, s).away}
                 </Text>
               </View>
             ))}
           </View>
         </View>
 
+        {!closed && (
+          <View style={styles.walkoverBox}>
+            <Text style={styles.sectionTitle}>Proceso de W.O. · Reglamento v6</Text>
+            {!match.walkover ? (
+              <>
+                <Text style={styles.walkoverHint}>
+                  Primero registra el llamado a cancha. El plazo de espera es de 10 minutos y comienza al guardar este registro.
+                </Text>
+                <View style={styles.inlineActions}>
+                  {(["home", "away"] as const).map((team) => (
+                    <Pressable
+                      key={team}
+                      onPress={() => setWalkoverAbsentTeam(team)}
+                      style={[styles.smallAction, walkoverAbsentTeam === team && styles.smallActionActive]}
+                    >
+                      <Text style={styles.smallActionText}>
+                        No presente: {team === "home" ? match.homeName : match.awayName}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Pressable onPress={() => void callToCourt()} style={styles.walkoverButton}>
+                  <Text style={styles.walkoverButtonText}>Registrar llamado a cancha</Text>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <Text style={styles.walkoverHint}>
+                  Llamado registrado: {new Date(match.walkover.calledAt).toLocaleTimeString()} · termina: {new Date(match.walkover.waitDeadline).toLocaleTimeString()}
+                </Text>
+                <Text style={styles.walkoverCountdown}>
+                  {Math.max(0, Math.ceil((new Date(match.walkover.waitDeadline).getTime() - walkoverNow) / 1000))} s restantes
+                </Text>
+                <Text style={styles.walkoverHint}>
+                  El Reglamento v6 no concreta el número mínimo de jugadores presentes. Registra ambos conteos y deja la decisión al árbitro; la app no impone un mínimo nuevo.
+                </Text>
+                <TextInput style={styles.reasonInput} placeholder="Árbitro que decide" placeholderTextColor="#70737C" value={refereeName} onChangeText={setRefereeName} />
+                <View style={styles.inlineInputs}>
+                  <TextInput style={styles.countInput} keyboardType="number-pad" placeholder="Presentes local" placeholderTextColor="#70737C" value={homePresentCount} onChangeText={setHomePresentCount} />
+                  <TextInput style={styles.countInput} keyboardType="number-pad" placeholder="Presentes visitante" placeholderTextColor="#70737C" value={awayPresentCount} onChangeText={setAwayPresentCount} />
+                </View>
+                <TextInput
+                  style={styles.reasonInput}
+                  placeholder="Condición de jugadores presentes y observación arbitral"
+                  placeholderTextColor="#70737C"
+                  value={playerConditionNote}
+                  onChangeText={setPlayerConditionNote}
+                  multiline
+                />
+                <Pressable
+                  disabled={walkoverNow < new Date(match.walkover.waitDeadline).getTime()}
+                  onPress={() => void confirmMatchWalkover()}
+                  style={({ pressed }) => [styles.walkoverButton, walkoverNow < new Date(match.walkover!.waitDeadline).getTime() && styles.walkoverButtonDisabled, pressed && styles.pressed]}
+                >
+                  <Text style={styles.walkoverButtonText}>Confirmar W.O. con decisión arbitral</Text>
+                </Pressable>
+              </>
+            )}
+          </View>
+        )}
+
         {/* Tiempos Muertos del Set Activo */}
         {!closed && (
           <View style={styles.timeoutRow}>
             <View style={styles.timeoutHeader}>
-              <Text style={styles.sectionTitle}>Tiempos Muertos (Set {match.currentSet})</Text>
+              <Text style={styles.sectionTitle}>Tiempos Muertos ({currentSetLabel})</Text>
               <Text style={styles.timeoutHint}>1 de 30s por equipo y set</Text>
             </View>
 
@@ -416,7 +795,7 @@ export default function LiveScoreScreen() {
                     {evt.team === "home" ? match.homeName : match.awayName} ({evt.delta > 0 ? "+1" : "-1"})
                   </Text>
                   <Text style={styles.historyTime}>
-                    Set {evt.setNumber} · {new Date(evt.createdAt).toLocaleTimeString()}
+                    {match.phase === "group" && evt.setNumber === 3 ? "Prolongación del set 2" : `Set ${evt.setNumber}`} · {new Date(evt.createdAt).toLocaleTimeString()}
                   </Text>
                   {evt.reason && <Text style={styles.historyReason}>Motivo: {evt.reason}</Text>}
                 </View>
@@ -516,6 +895,76 @@ const styles = StyleSheet.create({
   setCardActive: { borderColor: "#E53935", backgroundColor: "#1E181A" },
   setCardNum: { color: "#70737C", fontSize: 10, fontWeight: "800" },
   setCardScore: { color: "#FFF", fontSize: 14, fontWeight: "900", marginTop: 2 },
+
+  alignmentBox: { backgroundColor: "#17181D", borderRadius: 16, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: "#2B2D35" },
+  setupFocus: { backgroundColor: "#17181D", borderRadius: 16, padding: 14, marginBottom: 16, borderWidth: 1.5, borderColor: "#E53935" },
+  setupKicker: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 1.1 },
+  setupTitle: { color: "#FFF", fontSize: 20, fontWeight: "900", marginTop: 3, marginBottom: 5 },
+  setupTeam: { borderTopWidth: 1, borderTopColor: "#2B2D35", paddingTop: 12, marginTop: 12 },
+  setupTeamHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  setupTeamStatus: { color: "#A6A8AE", fontSize: 11, fontWeight: "800" },
+  courtDiagram: { backgroundColor: "#252A2E", borderRadius: 10, padding: 7, borderWidth: 1, borderColor: "#4A5A50" },
+  courtRow: { flexDirection: "row", gap: 6 },
+  courtSelector: { flex: 1, minHeight: 66, backgroundColor: "#202229", borderRadius: 8, padding: 6, borderWidth: 1, borderColor: "#353845" },
+  p1Selector: { borderColor: "#FFB74D" },
+  courtJersey: { color: "#FFF", fontSize: 18, fontWeight: "900", marginTop: 1 },
+  selectorHint: { color: "#70737C", fontSize: 7, fontWeight: "900", marginTop: 3 },
+  netLine: { height: 15, borderTopWidth: 2, borderTopColor: "#E53935", marginVertical: 5, justifyContent: "center", alignItems: "center" },
+  netLabel: { color: "#E53935", fontSize: 7, fontWeight: "900", backgroundColor: "#252A2E", paddingHorizontal: 5 },
+  controlLabel: { color: "#70737C", fontSize: 9, fontWeight: "900", letterSpacing: 0.6 },
+  controlNote: { color: "#A6A8AE", fontSize: 10, marginTop: 4 },
+  compactChoice: { backgroundColor: "#2B2D35", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 6 },
+  compactChoiceActive: { backgroundColor: "#E53935" },
+  firstServeBar: { borderTopWidth: 1, borderTopColor: "#2B2D35", marginTop: 14, paddingTop: 12 },
+  firstServeChoices: { flexDirection: "row", gap: 8, marginTop: 8 },
+  serveChoice: { flex: 1, backgroundColor: "#2B2D35", borderRadius: 8, padding: 10, alignItems: "center" },
+  serveChoiceActive: { backgroundColor: "#E53935" },
+  serveChoiceText: { color: "#FFF", fontSize: 11, fontWeight: "900" },
+  scoreboardLockedCard: { opacity: 0.66 },
+  scoreboardLocked: { backgroundColor: "#211D21", borderRadius: 9, padding: 10, marginBottom: 12, borderWidth: 1, borderColor: "#5B3438" },
+  scoreboardLockedTitle: { color: "#FFB74D", fontSize: 10, fontWeight: "900", letterSpacing: 0.7 },
+  scoreboardLockedText: { color: "#A6A8AE", fontSize: 11, marginTop: 3 },
+  alignmentSummary: { marginTop: 2 },
+  summaryHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  summarySubline: { color: "#70737C", fontSize: 10, marginTop: -4 },
+  expandButton: { backgroundColor: "#2B2D35", borderRadius: 7, paddingHorizontal: 9, paddingVertical: 7 },
+  expandButtonText: { color: "#FFF", fontSize: 9, fontWeight: "900" },
+  summaryTeamName: { color: "#FFF", fontSize: 12, fontWeight: "900" },
+  summaryServeActive: { color: "#55C77A" },
+  summaryReceive: { color: "#A6A8AE" },
+  rotationPulse: { backgroundColor: "#243D2D", borderRadius: 7, padding: 8, marginBottom: 8 },
+  rotationPulseText: { color: "#8BE0A1", fontSize: 10, fontWeight: "900", textAlign: "center" },
+  alignmentHint: { color: "#A6A8AE", fontSize: 10, marginBottom: 8 },
+  lineupTeam: { marginBottom: 14 },
+  courtGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  courtCell: { width: "31%", minHeight: 58, backgroundColor: "#202229", borderRadius: 8, padding: 7, borderWidth: 1, borderColor: "#353845" },
+  serverCell: { borderColor: "#55C77A", backgroundColor: "#192A20" },
+  courtPosition: { color: "#E53935", fontSize: 10, fontWeight: "900" },
+  courtPlayer: { color: "#FFF", fontSize: 10, fontWeight: "700", marginTop: 3 },
+  serverMark: { color: "#55C77A", fontSize: 8, fontWeight: "900", marginTop: 3 },
+  serverLabel: { color: "#FFB74D", fontSize: 10, fontWeight: "800", marginBottom: 7 },
+  inlineActions: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6, marginTop: 8 },
+  positionBtn: { backgroundColor: "#2B2D35", borderRadius: 6, paddingHorizontal: 9, paddingVertical: 6 },
+  positionBtnActive: { backgroundColor: "#E53935" },
+  positionBtnText: { color: "#FFF", fontSize: 10, fontWeight: "800" },
+  servingTeamBtn: { backgroundColor: "#2B2D35", borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8, maxWidth: "48%" },
+  primaryAction: { backgroundColor: "#E53935", borderRadius: 9, padding: 12, alignItems: "center", marginTop: 12 },
+  primaryActionText: { color: "#FFF", fontSize: 12, fontWeight: "900" },
+  faultAction: { borderColor: "#FFB74D", borderWidth: 1, borderRadius: 9, padding: 10, alignItems: "center", marginTop: 12 },
+  faultActionText: { color: "#FFB74D", fontSize: 12, fontWeight: "800" },
+  faultForm: { marginTop: 10, gap: 8 },
+  faultHistory: { marginTop: 10, gap: 4 },
+  walkoverBox: { backgroundColor: "#2A2116", borderRadius: 12, padding: 12, marginBottom: 16, borderWidth: 1, borderColor: "#8D642A" },
+  walkoverHint: { color: "#E6D6B5", fontSize: 11, lineHeight: 16, marginTop: 5 },
+  walkoverCountdown: { color: "#FFB74D", fontSize: 18, fontWeight: "900", marginTop: 8 },
+  walkoverButton: { backgroundColor: "#B56B18", borderRadius: 9, padding: 12, alignItems: "center", marginTop: 10 },
+  walkoverButtonDisabled: { opacity: 0.45 },
+  walkoverButtonText: { color: "#FFF", fontSize: 12, fontWeight: "900" },
+  smallAction: { backgroundColor: "#2B2D35", borderRadius: 7, padding: 8, maxWidth: "48%" },
+  smallActionActive: { backgroundColor: "#7A3F1C" },
+  smallActionText: { color: "#FFF", fontSize: 10, fontWeight: "800" },
+  inlineInputs: { flexDirection: "row", gap: 8, marginTop: 8 },
+  countInput: { flex: 1, backgroundColor: "#101114", color: "#FFF", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, fontSize: 12 },
 
   timeoutRow: { marginBottom: 16 },
   timeoutHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },

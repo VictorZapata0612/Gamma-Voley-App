@@ -37,7 +37,7 @@ export default function PlayerFormScreen() {
     }
 
     try {
-      const parsedJersey = jerseyNumber.trim() ? parseInt(jerseyNumber, 10) : null;
+      const parsedJersey = jerseyNumber.trim() ? Number(jerseyNumber.trim()) : null;
 
       await savePlayer(db, {
         id: playerId ?? `player-${Date.now()}`,
@@ -73,7 +73,7 @@ export default function PlayerFormScreen() {
 
         <Field label="Nombre completo" value={name} onChangeText={setName} placeholder="Ej. Mariana Pajón" />
         <Field
-          label="Número de Camiseta (Opcional)"
+          label="Número de Camiseta (Obligatorio)"
           value={jerseyNumber}
           onChangeText={setJerseyNumber}
           placeholder="Ej. 10"

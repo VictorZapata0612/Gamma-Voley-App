@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateStandings } from "./standings";
+import { applyQualificationResolution, calculateStandings } from "./standings";
 import type { MatchResult, Team } from "./types";
 
 const teams: Team[] = [
@@ -84,5 +84,37 @@ describe("tabla de posiciones de grupos", () => {
       matchesPlayed: 0,
       classificationPoints: 0,
     });
+  });
+
+  it("aplica una resolución oficial de dos equipos sin alterar sus estadísticas", () => {
+      const rows = calculateStandings(
+        [
+          { id: "a", name: "A" },
+          { id: "b", name: "B" },
+          { id: "c", name: "C" },
+        ],
+        [],
+      ).map((row, index) => ({
+        ...row,
+        classificationPoints: index === 2 ? 0 : 1,
+        pointDifferential: index === 2 ? -1 : 0,
+        tiedForQualification: index < 2,
+      }));
+
+      const resolved = applyQualificationResolution(rows, {
+        id: "resolution-a",
+        tournamentId: "tournament",
+        groupId: "A",
+        affectedTeamIds: ["a", "b"],
+        qualifiedTeamId: "b",
+        criterion: "Criterio del reglamento",
+        decidedBy: "Organizador",
+        decidedAt: "2026-11-09T19:00:00.000Z",
+      });
+
+      expect(resolved.map((row) => row.teamId)).toEqual(["b", "a", "c"]);
+      expect(resolved[0].matchesPlayed).toBe(rows[1].matchesPlayed);
+      expect(resolved[0].tiedForQualification).toBe(false);
+      expect(resolved[1].tiedForQualification).toBe(false);
   });
 });

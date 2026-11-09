@@ -1,6 +1,6 @@
 # Gamma Voley 2026
 
-Aplicación móvil para gestionar el Torneo Mixto Gamma Voley 2026 (14 y 15 de noviembre de 2026): equipos, jugadores, grupos, calendario, marcador en vivo, clasificación, semifinales y final. Funciona sin conexión; los datos se guardan en SQLite en el teléfono.
+Aplicación móvil para gestionar el Torneo Mixto Gamma Voley 2026 (14 y 15 de noviembre de 2026): equipos, jugadores, grupos, calendario, marcador en vivo, clasificación, semifinales y final. Funciona sin conexión; los datos se guardan en SQLite en el teléfono. Desde el marcador se puede generar, imprimir y compartir un acta PDF con los datos locales disponibles; los campos no registrados se muestran como “No disponible”.
 
 ## Ejecutar
 

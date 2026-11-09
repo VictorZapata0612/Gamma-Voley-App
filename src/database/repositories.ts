@@ -1,5 +1,5 @@
 import type { SQLiteDatabase } from "expo-sqlite";
-import type { GroupId, Match, MatchResult, PaymentStatus, ScoreAction, SemifinalBracket, SetScore, Team, TimeoutState, WalkoverRecord } from "@/domain/types";import type { Player } from "@/domain/eligibility";
+import type { GroupId, Match, MatchResult, PaymentStatus, QualificationResolution, ScoreAction, SemifinalBracket, SetScore, Team, TimeoutState, WalkoverRecord } from "@/domain/types";import type { Player } from "@/domain/eligibility";
 import type { ScheduledGroupMatch } from "@/domain/schedule";
 import { GROUP_SIZE, TOURNAMENT_TEAM_COUNT } from "@/domain/schedule";
 import { deriveMatchProgress, type MatchProgress } from "@/domain/liveScoring";
@@ -7,6 +7,7 @@ import { getTimeoutSetNumber, isSetClosed } from "@/domain/rules";
 import { walkoverSets } from "@/domain/walkover";
 import { applySubstitution, validateLineup, rotateClockwise, type CourtPosition, type LineupPlayer } from "@/domain/alignment";
 import { MAX_TEAM_PLAYERS, validatePlayerRegistration } from "@/domain/registration";
+import { applyQualificationResolution, calculateStandings, hasPendingQualificationTie } from "@/domain/standings";
 
 type TeamRow = {
   id: string;
@@ -100,11 +101,14 @@ export type SubstitutionEventRecord = {
 
 export type LiveMatchRecord = {
   id: string;
+  tournamentId: string;
   phase: Match["phase"];
   homeTeamId: string;
   awayTeamId: string;
   homeName: string;
   awayName: string;
+  courtNumber: number | null;
+  scheduledAt: string | null;
   currentSet: number;
   status: Match["status"];
   winner: "home" | "away" | null;
@@ -230,8 +234,9 @@ export async function saveScheduledGroupMatches(
 
 export async function getLiveMatch(db: SQLiteDatabase, matchId: string): Promise<LiveMatchRecord | null> {
   const match = await db.getFirstAsync<Omit<LiveMatchRecord, "sets" | "timeouts" | "recentEvents" | "pendingSyncCount">>(
-    `SELECT m.id, m.phase, m.home_team_id AS homeTeamId, m.away_team_id AS awayTeamId,
-      home.name AS homeName, away.name AS awayName, m.current_set AS currentSet,
+    `SELECT m.id, m.tournament_id AS tournamentId, m.phase, m.home_team_id AS homeTeamId, m.away_team_id AS awayTeamId,
+      home.name AS homeName, away.name AS awayName, m.court_number AS courtNumber,
+      m.scheduled_at AS scheduledAt, m.current_set AS currentSet,
       m.status, m.winner
      FROM matches m JOIN teams home ON home.id = m.home_team_id
       JOIN teams away ON away.id = m.away_team_id WHERE m.id = ?`,
@@ -952,6 +957,111 @@ export async function listGroupResults(db: SQLiteDatabase, tournamentId: string)
   return results;
 }
 
+export type QualificationResolutionRecord = QualificationResolution;
+
+export async function listQualificationResolutions(
+  db: SQLiteDatabase,
+  tournamentId: string,
+): Promise<QualificationResolutionRecord[]> {
+  const rows = await db.getAllAsync<{
+    id: string;
+    tournament_id: string;
+    group_id: string;
+    affected_team_ids_json: string;
+    qualified_team_id: string;
+    criterion: string;
+    decided_by: string;
+    decided_at: string;
+  }>(
+    `SELECT id, tournament_id, group_id, affected_team_ids_json, qualified_team_id,
+      criterion, decided_by, decided_at
+     FROM qualification_resolutions
+     WHERE tournament_id = ?`,
+    tournamentId,
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    tournamentId: row.tournament_id,
+    groupId: row.group_id.endsWith("-a") ? "A" : "B",
+    affectedTeamIds: JSON.parse(row.affected_team_ids_json) as string[],
+    qualifiedTeamId: row.qualified_team_id,
+    criterion: row.criterion,
+    decidedBy: row.decided_by,
+    decidedAt: row.decided_at,
+  }));
+}
+
+export async function saveQualificationResolution(
+  db: SQLiteDatabase,
+  resolution: Omit<QualificationResolution, "id" | "decidedAt"> & { decidedAt?: string },
+): Promise<void> {
+  const affectedTeamIds = [...new Set(resolution.affectedTeamIds)];
+  if (affectedTeamIds.length < 2 || !affectedTeamIds.includes(resolution.qualifiedTeamId)) {
+    throw new Error("La resolución debe identificar al menos dos equipos empatados e incluir al clasificado.");
+  }
+  if (!resolution.criterion.trim() || !resolution.decidedBy.trim()) {
+    throw new Error("El criterio y el nombre del organizador son obligatorios.");
+  }
+  const group = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM groups WHERE tournament_id = ? AND name = ?",
+    resolution.tournamentId,
+    resolution.groupId,
+  );
+  if (!group) throw new Error(`No existe el Grupo ${resolution.groupId} para este torneo.`);
+
+  const now = new Date().toISOString();
+  const id = `qualification-${resolution.tournamentId}-${resolution.groupId.toLowerCase()}`;
+  await db.execAsync("BEGIN IMMEDIATE TRANSACTION;");
+  try {
+    await db.runAsync(
+      `INSERT INTO qualification_resolutions
+        (id, tournament_id, group_id, affected_team_ids_json, qualified_team_id,
+         criterion, decided_by, decided_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(tournament_id, group_id) DO UPDATE SET
+         affected_team_ids_json = excluded.affected_team_ids_json,
+         qualified_team_id = excluded.qualified_team_id,
+         criterion = excluded.criterion,
+         decided_by = excluded.decided_by,
+         decided_at = excluded.decided_at,
+         updated_at = excluded.updated_at`,
+      id,
+      resolution.tournamentId,
+      group.id,
+      JSON.stringify(affectedTeamIds),
+      resolution.qualifiedTeamId,
+      resolution.criterion.trim(),
+      resolution.decidedBy.trim(),
+      resolution.decidedAt ?? now,
+      now,
+      now,
+    );
+    await enqueueSyncOperation(
+      db,
+      `sync-qualification-resolution-${resolution.tournamentId}-${resolution.groupId.toLowerCase()}-${Date.now()}`,
+      "qualification_resolution",
+      id,
+      "save_qualification_resolution",
+      {
+        id,
+        tournamentId: resolution.tournamentId,
+        groupId: group.id,
+        groupName: resolution.groupId,
+        affectedTeamIds,
+        qualifiedTeamId: resolution.qualifiedTeamId,
+        criterion: resolution.criterion.trim(),
+        decidedBy: resolution.decidedBy.trim(),
+        decidedAt: resolution.decidedAt ?? now,
+        updatedAt: now,
+      },
+    );
+    await db.execAsync("COMMIT;");
+  } catch (error) {
+    await db.execAsync("ROLLBACK;");
+    throw error;
+  }
+}
+
 
 export async function saveTeam(
   db: SQLiteDatabase,
@@ -1627,6 +1737,30 @@ export async function createKnockoutBracketMatches(
 ): Promise<void> {
   if (!(await isGroupPhaseFinished(db, tournamentId))) {
     throw new Error("Las semifinales se generan cuando terminan todos los partidos de grupos.");
+  }
+  const [groupTeams, groupResults, resolutions] = await Promise.all([
+    listGroupTeams(db, tournamentId),
+    listGroupResults(db, tournamentId),
+    listQualificationResolutions(db, tournamentId),
+  ]);
+  for (const groupId of ["A", "B"] as const) {
+    const teamsInGroup = groupTeams
+      .filter((team) => team.groupId === groupId)
+      .map((team) => ({ id: team.id, name: team.name, groupId }));
+    const rows = calculateStandings(
+      teamsInGroup,
+      groupResults.filter((result) =>
+        teamsInGroup.some((team) => team.id === result.homeTeamId) &&
+        teamsInGroup.some((team) => team.id === result.awayTeamId),
+      ),
+    );
+    const resolvedRows = applyQualificationResolution(
+      rows,
+      resolutions.find((resolution) => resolution.groupId === groupId),
+    );
+    if (hasPendingQualificationTie(resolvedRows)) {
+      throw new Error(`No se puede generar el cuadro: el empate del Grupo ${groupId} sigue sin resolver.`);
+    }
   }
   const now = new Date().toISOString();
   await db.execAsync("BEGIN TRANSACTION;");

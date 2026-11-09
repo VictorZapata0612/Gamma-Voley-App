@@ -185,6 +185,40 @@ for (const membership of memberships) {
   );
 }
 
+  const qualificationResolutions = await db.getAllAsync<{
+    id: string;
+    tournament_id: string;
+    group_id: string;
+    affected_team_ids_json: string;
+    qualified_team_id: string;
+    criterion: string;
+    decided_by: string;
+    decided_at: string;
+    updated_at: string;
+  }>("SELECT * FROM qualification_resolutions");
+  for (const resolution of qualificationResolutions) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue
+       (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+       VALUES (?, 'qualification_resolution', ?, 'save_qualification_resolution', ?, 'pending', 0, NULL, ?, ?)`,
+      `requeue-qualification-resolution-${resolution.id}`,
+      resolution.id,
+      JSON.stringify({
+        id: resolution.id,
+        tournamentId: resolution.tournament_id,
+        groupId: resolution.group_id,
+        affectedTeamIds: JSON.parse(resolution.affected_team_ids_json) as string[],
+        qualifiedTeamId: resolution.qualified_team_id,
+        criterion: resolution.criterion,
+        decidedBy: resolution.decided_by,
+        decidedAt: resolution.decided_at,
+        updatedAt: resolution.updated_at,
+      }),
+      now,
+      now,
+    );
+  }
+
 // 5. Re-encolar Jugadores
   const players = await db.getAllAsync<{
     id: string;

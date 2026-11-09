@@ -559,6 +559,48 @@ if (item.entityType === "team" || item.operation === "save_team") {
  return { success: true };
       }
 
+      if (
+        item.entityType === "qualification_resolution" ||
+        item.operation === "save_qualification_resolution"
+      ) {
+        const tournamentId = requiredString(
+          payload.tournamentId ?? payload.tournament_id,
+          "qualificationResolution.tournamentId",
+        );
+        const groupId = requiredString(
+          payload.groupId ?? payload.group_id,
+          "qualificationResolution.groupId",
+        );
+        const affectedTeamIds = payload.affectedTeamIds ?? payload.affected_team_ids;
+        if (
+          !Array.isArray(affectedTeamIds) ||
+          affectedTeamIds.length < 2 ||
+          affectedTeamIds.some((teamId) => typeof teamId !== "string")
+        ) {
+          throw new Error("qualificationResolution.affectedTeamIds debe contener los equipos empatados.");
+        }
+        const qualifiedTeamId = requiredString(
+          payload.qualifiedTeamId ?? payload.qualified_team_id,
+          "qualificationResolution.qualifiedTeamId",
+        );
+        if (!affectedTeamIds.includes(qualifiedTeamId)) {
+          throw new Error("El equipo clasificado debe estar entre los equipos afectados.");
+        }
+        await this.ensureTournamentExists(tournamentId);
+        await this.upsert("qualification_resolutions", {
+          id: requiredString(payload.id ?? item.entityId, "qualificationResolution.id"),
+          tournament_id: tournamentId,
+          group_id: groupId,
+          affected_team_ids: affectedTeamIds,
+          qualified_team_id: qualifiedTeamId,
+          criterion: requiredString(payload.criterion, "qualificationResolution.criterion"),
+          decided_by: requiredString(payload.decidedBy ?? payload.decided_by, "qualificationResolution.decidedBy"),
+          decided_at: requiredString(payload.decidedAt ?? payload.decided_at, "qualificationResolution.decidedAt"),
+          updated_at: payload.updatedAt ?? item.updatedAt,
+        }, "tournament_id,group_id");
+        return { success: true };
+      }
+
       // Jugador
       if (item.entityType === "player" || item.operation === "save_player") {
         const teamId = requiredString(

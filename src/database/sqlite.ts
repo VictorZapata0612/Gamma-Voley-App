@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from "expo-sqlite";
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 export const DEFAULT_TOURNAMENT_ID = "gamma-voley-2026";
 
 async function hasColumn(db: SQLiteDatabase, table: string, column: string): Promise<boolean> {
@@ -211,6 +211,20 @@ const INITIAL_SCHEMA = `
     action TEXT NOT NULL,
     details_json TEXT NOT NULL,
     created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS qualification_resolutions (
+    id TEXT PRIMARY KEY NOT NULL,
+    tournament_id TEXT NOT NULL REFERENCES tournaments(id),
+    group_id TEXT NOT NULL REFERENCES groups(id),
+    affected_team_ids_json TEXT NOT NULL,
+    qualified_team_id TEXT NOT NULL REFERENCES teams(id),
+    criterion TEXT NOT NULL,
+    decided_by TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (tournament_id, group_id)
   );
 
   CREATE TABLE IF NOT EXISTS sync_queue (
@@ -445,6 +459,23 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
           player_condition_note TEXT,
           status TEXT NOT NULL CHECK (status IN ('called', 'confirmed')),
           created_at TEXT NOT NULL
+        );
+      `);
+    }
+    if (currentVersion < 9) {
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS qualification_resolutions (
+          id TEXT PRIMARY KEY NOT NULL,
+          tournament_id TEXT NOT NULL REFERENCES tournaments(id),
+          group_id TEXT NOT NULL REFERENCES groups(id),
+          affected_team_ids_json TEXT NOT NULL,
+          qualified_team_id TEXT NOT NULL REFERENCES teams(id),
+          criterion TEXT NOT NULL,
+          decided_by TEXT NOT NULL,
+          decided_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (tournament_id, group_id)
         );
       `);
     }

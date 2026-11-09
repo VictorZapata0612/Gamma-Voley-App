@@ -3,6 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, Vibration, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useSQLiteContext } from "expo-sqlite";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
 import {
   getLiveMatch,
   listEligiblePlayersForMatch,
@@ -25,6 +27,7 @@ import { useMatchRealtime } from "@/hooks/useMatchRealtime";
 import type { MatchRealtimeStatus } from "@/services/realtime";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
 import { colors, spacing, touchTarget } from "@/ui/theme";
+import { generateMatchActHtml, loadMatchActData } from "@/services/matchAct";
 
 /**
  * Alarma de silbato/chicharra y vibración multitono al finalizar los 30s.
@@ -97,6 +100,7 @@ export default function LiveScoreScreen() {
   const [playerConditionNote, setPlayerConditionNote] = useState("");
   const [walkoverNow, setWalkoverNow] = useState(0);
   const [pendingPointTeam, setPendingPointTeam] = useState<"home" | "away" | null>(null);
+  const [isGeneratingAct, setIsGeneratingAct] = useState(false);
 
   const load = useCallback(async () => {
     if (!matchId) {
@@ -326,6 +330,38 @@ export default function LiveScoreScreen() {
         setError(err instanceof Error ? err.message : "No se pudo registrar la sustitución.");
       }
     }
+
+    async function printMatchAct() {
+      if (!match) return;
+      setIsGeneratingAct(true);
+      try {
+        const data = await loadMatchActData(db, match.id);
+        await Print.printAsync({ html: generateMatchActHtml(data) });
+        setError(null);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "No se pudo imprimir el acta.");
+      } finally {
+        setIsGeneratingAct(false);
+      }
+    }
+
+    async function shareMatchAct() {
+      if (!match) return;
+      setIsGeneratingAct(true);
+      try {
+        if (!(await Sharing.isAvailableAsync())) {
+          throw new Error("Compartir archivos no está disponible en este dispositivo. Usa Imprimir acta.");
+        }
+        const data = await loadMatchActData(db, match.id);
+        const { uri } = await Print.printToFileAsync({ html: generateMatchActHtml(data) });
+        await Sharing.shareAsync(uri, { mimeType: "application/pdf", UTI: ".pdf" });
+        setError(null);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "No se pudo generar o compartir el acta.");
+      } finally {
+        setIsGeneratingAct(false);
+      }
+    }
   if (!match) {
     return (
       <SafeAreaView style={styles.safe}>
@@ -370,6 +406,26 @@ export default function LiveScoreScreen() {
             ? "● Marcador conectado en tiempo real"
             : `○ Tiempo real: ${realtimeStatus.toLowerCase()}. Se reintentará al recuperar la conexión.`}
         </Text>
+        <View style={styles.actActions}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Generar y compartir acta del partido"
+            onPress={() => void shareMatchAct()}
+            disabled={isGeneratingAct}
+            style={[styles.actButton, isGeneratingAct && styles.actButtonDisabled]}
+          >
+            <Text style={styles.actButtonText}>{isGeneratingAct ? "Generando acta..." : "Compartir acta PDF"}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Imprimir acta del partido"
+            onPress={() => void printMatchAct()}
+            disabled={isGeneratingAct}
+            style={[styles.actButtonSecondary, isGeneratingAct && styles.actButtonDisabled]}
+          >
+            <Text style={styles.actButtonSecondaryText}>Imprimir acta</Text>
+          </Pressable>
+        </View>
 
         {/* Modal / Tarjeta Flotante del Temporizador de Tiempo Muerto (30s) */}
         {timeoutSeconds !== null && (
@@ -823,6 +879,12 @@ const styles = StyleSheet.create({
   back: { color: "#E53935", fontSize: 14, fontWeight: "700", marginBottom: 14 },
 
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 },
+  actActions: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 16 },
+  actButton: { backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 11 },
+  actButtonText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800" },
+  actButtonSecondary: { backgroundColor: "#2B2D35", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 11 },
+  actButtonSecondaryText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800" },
+  actButtonDisabled: { opacity: 0.55 },
   eyebrow: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
   matchTitle: { color: "#FFF", fontSize: 18, fontWeight: "900", marginTop: 2 },
   statusBadge: { backgroundColor: "#2B2D35", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },

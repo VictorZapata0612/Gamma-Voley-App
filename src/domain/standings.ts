@@ -1,4 +1,4 @@
-import type { MatchResult, StandingRow, Team } from "./types";
+import type { MatchResult, QualificationResolution, StandingRow, Team } from "./types";
 
 // Official points: won 2-0 = 3, won 1-1 = 2, lost 1-1 = 1, lost 0-2 = 0.
 // Only sets 1 and 2 count as sets; the prolongation decides the winner but is not a set.
@@ -124,4 +124,37 @@ export function hasPendingQualificationTie(rows: StandingRow[], qualifyingCount 
   const next = rows[qualifyingCount];
   return boundary.classificationPoints === next.classificationPoints &&
     boundary.pointDifferential === next.pointDifferential;
+}
+
+export function applyQualificationResolution(
+  rows: StandingRow[],
+  resolution: QualificationResolution | undefined,
+): StandingRow[] {
+  if (
+    !resolution ||
+    resolution.affectedTeamIds.length !== 2 ||
+    !resolution.affectedTeamIds.includes(resolution.qualifiedTeamId)
+  ) {
+    return rows;
+  }
+
+  const affected = new Set(resolution.affectedTeamIds);
+  const selectedIndex = rows.findIndex((row) => row.teamId === resolution.qualifiedTeamId);
+  const otherIndex = rows.findIndex(
+    (row) => affected.has(row.teamId) && row.teamId !== resolution.qualifiedTeamId,
+  );
+  if (selectedIndex < 0 || otherIndex < 0) return rows;
+
+  const boundary = Math.min(selectedIndex, otherIndex);
+  if (boundary > 1 || !rows[selectedIndex].tiedForQualification || !rows[otherIndex].tiedForQualification) {
+    return rows;
+  }
+
+  const reordered = [...rows];
+  const selected = reordered.splice(selectedIndex, 1)[0];
+  reordered.splice(boundary, 0, selected);
+  return reordered.map((row, index) => ({
+    ...row,
+    tiedForQualification: index < 2 && affected.has(row.teamId) ? false : row.tiedForQualification,
+  }));
 }

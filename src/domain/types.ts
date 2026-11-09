@@ -66,6 +66,17 @@ export type StandingRow = {
   hasProvisionalResult?: boolean;
 };
 
+export type QualificationResolution = {
+  id: string;
+  tournamentId: string;
+  groupId: GroupId;
+  affectedTeamIds: string[];
+  qualifiedTeamId: string;
+  criterion: string;
+  decidedBy: string;
+  decidedAt: string;
+};
+
 export type MatchResult = {
   matchId: string;
   phase: TournamentPhase;

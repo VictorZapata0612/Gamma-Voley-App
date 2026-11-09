@@ -384,15 +384,68 @@ export async function reconcileRemoteTournament(
   db: SQLiteDatabase,
   tournamentId: string,
 ): Promise<void> {
-  const { data, error } = await supabase
+  const [{ data, error }, { data: resolutions, error: resolutionsError }] = await Promise.all([
+    supabase
     .from("matches")
     .select("id")
-    .eq("tournament_id", tournamentId);
+    .eq("tournament_id", tournamentId),
+    supabase
+      .from("qualification_resolutions")
+      .select("id, tournament_id, group_id, affected_team_ids, qualified_team_id, criterion, decided_by, decided_at, created_at, updated_at")
+      .eq("tournament_id", tournamentId),
+  ]);
   throwIfError(error);
+  throwIfError(resolutionsError);
 
   await Promise.all(
     ((data ?? []) as { id: string }[]).map((match) => reconcileRemoteMatch(db, match.id)),
   );
+
+  const pending = await db.getFirstAsync<{ found: number }>(
+    `SELECT 1 AS found FROM sync_queue
+     WHERE entity_type = 'qualification_resolution'
+       AND status IN ('pending', 'error')
+     LIMIT 1`,
+  );
+  if (pending) return;
+
+  await db.execAsync("BEGIN TRANSACTION;");
+  try {
+    await db.runAsync("DELETE FROM qualification_resolutions WHERE tournament_id = ?", tournamentId);
+    for (const resolution of (resolutions ?? []) as {
+      id: string;
+      tournament_id: string;
+      group_id: string;
+      affected_team_ids: string[];
+      qualified_team_id: string;
+      criterion: string;
+      decided_by: string;
+      decided_at: string;
+      created_at: string | null;
+      updated_at: string | null;
+    }[]) {
+      await db.runAsync(
+        `INSERT INTO qualification_resolutions
+          (id, tournament_id, group_id, affected_team_ids_json, qualified_team_id,
+           criterion, decided_by, decided_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        resolution.id,
+        resolution.tournament_id,
+        resolution.group_id,
+        JSON.stringify(resolution.affected_team_ids),
+        resolution.qualified_team_id,
+        resolution.criterion,
+        resolution.decided_by,
+        resolution.decided_at,
+        resolution.created_at ?? resolution.decided_at,
+        resolution.updated_at ?? resolution.decided_at,
+      );
+    }
+    await db.execAsync("COMMIT;");
+  } catch (reconcileError) {
+    await db.execAsync("ROLLBACK;");
+    throw reconcileError;
+  }
 }
 
 export function subscribeToMatchRealtime(
@@ -546,6 +599,11 @@ export function subscribeToTournamentRealtime(
     channel.on("postgres_changes", { event: "*", schema: "public", table: "set_alignment_state" }, notifyUpdate);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "rotation_events" }, notifyUpdate);
     channel.on("postgres_changes", { event: "*", schema: "public", table: "rotation_faults" }, notifyUpdate);
+    channel.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "qualification_resolutions", filter: `tournament_id=eq.${tournamentId}` },
+      notifyUpdate,
+    );
 
   channel.subscribe((status) => {
     onStatus?.(status as TournamentRealtimeStatus);

@@ -75,6 +75,10 @@ export async function hydrateDefaultTournament(
     fetchRows("timeouts", { column: "match_id", values: matchIds }),
     fetchRows("walkover_events", { column: "match_id", values: matchIds }),
   ]);
+  const resolutions = await fetchRows("qualification_resolutions", {
+    column: "tournament_id",
+    value: DEFAULT_TOURNAMENT_ID,
+  });
 
   const now = new Date().toISOString();
   await db.execAsync("BEGIN TRANSACTION;");
@@ -153,6 +157,35 @@ export async function hydrateDefaultTournament(
         requiredString(player.eligibility_status, "players.eligibility_status"),
         nullableString(player.created_at) ?? now,
         nullableString(player.updated_at) ?? now,
+      );
+    }
+
+    const pendingResolutionIds = new Set(
+      (
+        await db.getAllAsync<{ entity_id: string }>(
+          `SELECT entity_id FROM sync_queue
+           WHERE entity_type = 'qualification_resolution'
+             AND status IN ('pending', 'error')`,
+        )
+      ).map((row) => row.entity_id),
+    );
+    for (const resolution of resolutions) {
+      if (pendingResolutionIds.has(String(resolution.id))) continue;
+      await db.runAsync(
+        `INSERT OR REPLACE INTO qualification_resolutions
+          (id, tournament_id, group_id, affected_team_ids_json, qualified_team_id,
+           criterion, decided_by, decided_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        requiredString(resolution.id, "qualification_resolutions.id"),
+        requiredString(resolution.tournament_id, "qualification_resolutions.tournament_id"),
+        requiredString(resolution.group_id, "qualification_resolutions.group_id"),
+        JSON.stringify(resolution.affected_team_ids),
+        requiredString(resolution.qualified_team_id, "qualification_resolutions.qualified_team_id"),
+        requiredString(resolution.criterion, "qualification_resolutions.criterion"),
+        requiredString(resolution.decided_by, "qualification_resolutions.decided_by"),
+        requiredString(resolution.decided_at, "qualification_resolutions.decided_at"),
+        nullableString(resolution.created_at) ?? now,
+        nullableString(resolution.updated_at) ?? now,
       );
     }
 

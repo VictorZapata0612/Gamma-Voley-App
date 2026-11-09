@@ -23,6 +23,7 @@ import { isSetClosed, toDisplaySetScore } from "@/domain/rules";
 import { useMatchRealtime } from "@/hooks/useMatchRealtime";
 import type { MatchRealtimeStatus } from "@/services/realtime";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
+import { colors, spacing, touchTarget } from "@/ui/theme";
 
 /**
  * Alarma de silbato/chicharra y vibración multitono al finalizar los 30s.
@@ -94,6 +95,7 @@ export default function LiveScoreScreen() {
   const [awayPresentCount, setAwayPresentCount] = useState("");
   const [playerConditionNote, setPlayerConditionNote] = useState("");
   const [walkoverNow, setWalkoverNow] = useState(0);
+  const [pendingPointTeam, setPendingPointTeam] = useState<"home" | "away" | null>(null);
 
   const load = useCallback(async () => {
     if (!matchId) {
@@ -199,12 +201,14 @@ export default function LiveScoreScreen() {
 
   async function change(team: "home" | "away", delta: 1 | -1) {
     if (!match) return;
+    if (delta === 1 && pendingPointTeam) return;
     if (delta < 0 && !reason.trim()) {
       setCorrectionMode(true);
       setError("Escribe el motivo de la corrección antes de restar un punto.");
       return;
     }
 
+    if (delta === 1) setPendingPointTeam(team);
     try {
       const action = {
         id: `score-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -231,6 +235,8 @@ export default function LiveScoreScreen() {
       void load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al registrar el punto.");
+    } finally {
+      if (delta === 1) setPendingPointTeam(null);
     }
   }
 
@@ -585,10 +591,10 @@ export default function LiveScoreScreen() {
                 <View style={styles.controlsRow}>
                   <Pressable
                     onPress={() => void change("home", 1)}
-                    disabled={!canAddPoint || !hasCurrentAlignment}
+                    disabled={!canAddPoint || !hasCurrentAlignment || pendingPointTeam !== null}
                     style={({ pressed }) => [styles.scoreBtn, styles.scoreBtnPlus, pressed && styles.pressed]}
                   >
-                    <Text style={styles.scoreBtnText}>+1</Text>
+                    <Text style={styles.scoreBtnText}>{pendingPointTeam === "home" ? "..." : "+1"}</Text>
                   </Pressable>
                   <Pressable
                     onPress={() => void change("home", -1)}
@@ -611,10 +617,10 @@ export default function LiveScoreScreen() {
                 <View style={styles.controlsRow}>
                   <Pressable
                     onPress={() => void change("away", 1)}
-                    disabled={!canAddPoint || !hasCurrentAlignment}
+                    disabled={!canAddPoint || !hasCurrentAlignment || pendingPointTeam !== null}
                     style={({ pressed }) => [styles.scoreBtn, styles.scoreBtnPlus, pressed && styles.pressed]}
                   >
-                    <Text style={styles.scoreBtnText}>+1</Text>
+                    <Text style={styles.scoreBtnText}>{pendingPointTeam === "away" ? "..." : "+1"}</Text>
                   </Pressable>
                   <Pressable
                     onPress={() => void change("away", -1)}
@@ -809,8 +815,8 @@ export default function LiveScoreScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#101114" },
-  container: { flexGrow: 1, padding: 18, paddingTop: 20, paddingBottom: 36 },
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { flexGrow: 1, padding: spacing.screen, paddingTop: spacing.screenTop, paddingBottom: spacing.screenBottom },
   center: { flex: 1, justifyContent: "center", alignItems: "center", padding: 20 },
   title: { color: "#FFF", fontSize: 16, fontWeight: "800", textAlign: "center" },
   back: { color: "#E53935", fontSize: 14, fontWeight: "700", marginBottom: 14 },
@@ -872,9 +878,9 @@ const styles = StyleSheet.create({
   scoreNumber: { color: "#FFF", fontSize: 56, fontWeight: "900", marginVertical: 4, fontVariant: ["tabular-nums"] },
 
   controlsRow: { flexDirection: "row", gap: 8, marginTop: 6 },
-  scoreBtn: { paddingVertical: 12, paddingHorizontal: 18, borderRadius: 10, alignItems: "center" },
-  scoreBtnPlus: { backgroundColor: "#E53935" },
-  scoreBtnMinus: { backgroundColor: "#2B2D35" },
+  scoreBtn: { ...touchTarget, paddingVertical: 12, paddingHorizontal: 18, borderRadius: 10, alignItems: "center" },
+  scoreBtnPlus: { backgroundColor: colors.primary },
+  scoreBtnMinus: { backgroundColor: colors.border },
   scoreBtnText: { color: "#FFF", fontSize: 18, fontWeight: "900" },
   scoreBtnMinusText: { color: "#A6A8AE", fontSize: 14, fontWeight: "800" },
 

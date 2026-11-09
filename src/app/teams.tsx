@@ -8,6 +8,7 @@ import { listTeamRecords, type TeamRecord } from "@/database/repositories";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
 import { supabase } from "@/services/supabase";
 import { TOURNAMENT_TEAM_COUNT } from "@/domain/schedule";
+import { colors, platformShadow, spacing } from "@/ui/theme";
 
 type RemoteTeam = {
   id: string;
@@ -108,8 +109,12 @@ export default function TeamsScreen() {
           </View>
 
           {/* Barra de progreso de cupos */}
-          <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: `${(teams.length / maxTeams) * 100}%` }]} />
+          <View
+            accessibilityRole="progressbar"
+            accessibilityLabel={`${teams.length} de ${maxTeams} equipos registrados`}
+            style={styles.progressBar}
+          >
+            <View style={[styles.progressFill, { width: `${Math.min(teams.length / maxTeams, 1) * 100}%` }]} />
           </View>
 
           <Text style={styles.quotaHint}>
@@ -119,7 +124,14 @@ export default function TeamsScreen() {
           </Text>
         </View>
 
-        {error && <Text style={styles.errorText}>{error}</Text>}
+        {error && (
+          <View style={styles.errorCard} accessibilityRole="alert">
+            <Text style={styles.errorText}>{error}</Text>
+            <Pressable onPress={() => void load()} style={styles.retryButton} accessibilityRole="button">
+              <Text style={styles.retryButtonText}>Reintentar</Text>
+            </Pressable>
+          </View>
+        )}
 
         {/* Listado de Equipos */}
         <View style={styles.sectionHeader}>
@@ -217,19 +229,20 @@ export default function TeamsScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#101114" },
-  container: { flexGrow: 1, padding: 18, paddingTop: 20, paddingBottom: 36 },
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { flexGrow: 1, padding: spacing.screen, paddingTop: spacing.screenTop, paddingBottom: spacing.screenBottom },
   back: { color: "#E53935", fontSize: 14, fontWeight: "700", marginBottom: 18 },
   eyebrow: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
   title: { color: "#FFF", fontSize: 28, fontWeight: "900", marginTop: 4 },
   subtitle: { color: "#A6A8AE", fontSize: 12, marginTop: 4, marginBottom: 16 },
 
   quotaCard: {
-    backgroundColor: "#17181D",
+    backgroundColor: colors.surface,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#2B2D35",
+    borderColor: colors.border,
+    ...platformShadow,
     marginBottom: 16,
   },
   quotaHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
@@ -252,7 +265,7 @@ const styles = StyleSheet.create({
   },
   progressFill: {
     height: "100%",
-    backgroundColor: "#E53935",
+    backgroundColor: colors.primary,
     borderRadius: 3,
   },
   quotaHint: { color: "#A6A8AE", fontSize: 11, lineHeight: 15 },
@@ -340,6 +353,23 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   fullNoticeText: { color: "#81C784", fontSize: 11, fontWeight: "700" },
-  errorText: { color: "#FF8D8D", fontSize: 12, marginBottom: 12, textAlign: "center" },
+  errorCard: {
+    backgroundColor: "#2A181A",
+    borderColor: "#7A2E32",
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 14,
+    padding: 12,
+  },
+  errorText: { color: colors.dangerText, fontSize: 12, marginBottom: 8 },
+  retryButton: {
+    alignSelf: "flex-start",
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: 8,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    justifyContent: "center",
+  },
+  retryButtonText: { color: colors.text, fontSize: 12, fontWeight: "800" },
   pressed: { opacity: 0.72 },
 });

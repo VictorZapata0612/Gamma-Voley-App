@@ -290,7 +290,7 @@ export default function HomeScreen() {
             {/* Métricas Reales del Torneo */}
             <View style={styles.statsRow}>
               <View style={styles.statPill}>
-                <Text style={styles.statNumber}>{data.teamsCount} / 8</Text>
+                <Text style={styles.statNumber}>{data.teamsCount} / 10</Text>
                 <Text style={styles.statTitle}>Equipos</Text>
               </View>
               <View style={styles.statPill}>

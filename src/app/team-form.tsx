@@ -18,6 +18,7 @@ export default function TeamFormScreen() {
   const [balancePaymentStatus, setBalancePaymentStatus] = useState<"pending" | "paid">("pending");
   const [registrationStatus, setRegistrationStatus] = useState<"pending" | "confirmed" | "withdrawn">("pending");
   const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (id) {
@@ -35,6 +36,9 @@ export default function TeamFormScreen() {
   }, [db, id]);
 
   async function submit() {
+    if (isSaving) return;
+    setIsSaving(true);
+    setError(null);
     try {
       await saveTeamRecord(db, {
         id: id ?? `team-${Date.now()}`,
@@ -54,6 +58,8 @@ export default function TeamFormScreen() {
       goBack("/teams");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No se pudo guardar el equipo.");
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -153,8 +159,14 @@ export default function TeamFormScreen() {
           Al guardar, la información de pago y confirmación se actualizará inmediatamente en la base de datos local SQLite y se sincronizará con Supabase.
         </Text>
 
-        <Pressable onPress={() => void submit()} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
-          <Text style={styles.primaryText}>Guardar Equipo</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={isSaving ? "Guardando equipo" : "Guardar equipo"}
+          disabled={isSaving}
+          onPress={() => void submit()}
+          style={({ pressed }) => [styles.primary, isSaving && styles.primaryDisabled, pressed && styles.pressed]}
+        >
+          <Text style={styles.primaryText}>{isSaving ? "Guardando..." : "Guardar Equipo"}</Text>
         </Pressable>
       </ScrollView>
     </SafeAreaView>
@@ -214,6 +226,7 @@ const styles = StyleSheet.create({
   note: { color: "#A6A8AE", fontSize: 11, lineHeight: 16, marginVertical: 12 },
   error: { color: "#FF8D8D", marginBottom: 10, fontSize: 12 },
   primary: { backgroundColor: "#E53935", borderRadius: 14, padding: 16, alignItems: "center", marginTop: 10 },
+  primaryDisabled: { opacity: 0.55 },
   primaryText: { color: "#FFF", fontWeight: "800", fontSize: 14 },
   pressed: { opacity: 0.72 },
 });

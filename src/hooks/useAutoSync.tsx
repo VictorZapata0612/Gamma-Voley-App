@@ -11,12 +11,17 @@ export function useAutoSync(db: SQLiteDatabase, intervalMs: number = 2000) {
     if (process.env.EXPO_OS === "web") return;
 
     const provider = new SupabaseSyncProvider(db);
+    const inFlight = { current: false };
 
     const sync = async () => {
+      if (inFlight.current) return;
+      inFlight.current = true;
       try {
         await processSyncQueue(db, provider);
       } catch {
         // Fallo silencioso de red para no bloquear la pantalla del árbitro
+      } finally {
+        inFlight.current = false;
       }
     };
 

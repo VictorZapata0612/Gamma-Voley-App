@@ -7,7 +7,6 @@ import {
   getPendingSyncOperations,
   getSyncQueueStats,
   processSyncQueue,
-  requeueAndResetAllData,
   type SyncQueueItem,
   type SyncResult,
 } from "@/services/sync";
@@ -45,7 +44,6 @@ export default function SyncScreen() {
     setIsSyncing(true);
     setError(null);
     try {
-      await requeueAndResetAllData(db);
       const provider = new SupabaseSyncProvider(db);
       const res = await processSyncQueue(db, provider);
       setLastSyncResult(res);
@@ -112,7 +110,7 @@ export default function SyncScreen() {
           {isSyncing ? (
             <ActivityIndicator color="#FFFFFF" size="small" />
           ) : (
-            <Text style={styles.syncButtonText}>⚡ Sincronizar Cola Remota</Text>
+            <Text style={styles.syncButtonText}>⚡ Sincronizar pendientes</Text>
           )}
         </Pressable>
 

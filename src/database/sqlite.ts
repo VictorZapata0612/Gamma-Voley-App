@@ -3,6 +3,11 @@ import type { SQLiteDatabase } from "expo-sqlite";
 const SCHEMA_VERSION = 8;
 export const DEFAULT_TOURNAMENT_ID = "gamma-voley-2026";
 
+async function hasColumn(db: SQLiteDatabase, table: string, column: string): Promise<boolean> {
+  const rows = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
+  return rows.some((row) => row.name === column);
+}
+
 const INITIAL_SCHEMA = `
   CREATE TABLE IF NOT EXISTS local_scores (
     match_id TEXT PRIMARY KEY NOT NULL,
@@ -410,11 +415,19 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
       `);
     }
     if (currentVersion < 8) {
+      if (!(await hasColumn(db, "teams", "initial_payment_status"))) {
+        await db.execAsync("ALTER TABLE teams ADD COLUMN initial_payment_status TEXT NOT NULL DEFAULT 'pending';");
+      }
+      if (!(await hasColumn(db, "teams", "balance_payment_status"))) {
+        await db.execAsync("ALTER TABLE teams ADD COLUMN balance_payment_status TEXT NOT NULL DEFAULT 'pending';");
+      }
+      if (!(await hasColumn(db, "teams", "initial_payment_paid_at"))) {
+        await db.execAsync("ALTER TABLE teams ADD COLUMN initial_payment_paid_at TEXT;");
+      }
+      if (!(await hasColumn(db, "teams", "balance_payment_paid_at"))) {
+        await db.execAsync("ALTER TABLE teams ADD COLUMN balance_payment_paid_at TEXT;");
+      }
       await db.execAsync(`
-        ALTER TABLE teams ADD COLUMN initial_payment_status TEXT NOT NULL DEFAULT 'pending';
-        ALTER TABLE teams ADD COLUMN balance_payment_status TEXT NOT NULL DEFAULT 'pending';
-        ALTER TABLE teams ADD COLUMN initial_payment_paid_at TEXT;
-        ALTER TABLE teams ADD COLUMN balance_payment_paid_at TEXT;
         UPDATE teams
            SET initial_payment_status = CASE WHEN payment_status = 'paid' THEN 'paid' ELSE 'pending' END,
                balance_payment_status = CASE WHEN payment_status = 'paid' THEN 'paid' ELSE 'pending' END;

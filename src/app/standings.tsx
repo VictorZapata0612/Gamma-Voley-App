@@ -1,5 +1,5 @@
 import { router, useFocusEffect } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useSQLiteContext } from "expo-sqlite";
@@ -40,10 +40,17 @@ export default function StandingsScreen() {
   const [criterion, setCriterion] = useState("");
   const [decidedBy, setDecidedBy] = useState("");
   const [selectedQualifiedTeamId, setSelectedQualifiedTeamId] = useState<string | null>(null);
+  const hydratedRef = useRef(false);
+  const loadingRef = useRef(false);
 
   const load = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
-      await hydrateDefaultTournament(db);
+      if (!hydratedRef.current) {
+        await hydrateDefaultTournament(db);
+        hydratedRef.current = true;
+      }
       await reconcileRemoteTournament(db, DEFAULT_TOURNAMENT_ID);
       setTeams(await listGroupTeams(db, DEFAULT_TOURNAMENT_ID));
       setResults(await listGroupResults(db, DEFAULT_TOURNAMENT_ID));
@@ -53,6 +60,8 @@ export default function StandingsScreen() {
       setResolutions(await listQualificationResolutions(db, DEFAULT_TOURNAMENT_ID));
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : "No se pudo cargar la clasificación.");
+    } finally {
+      loadingRef.current = false;
     }
   }, [db]);
 

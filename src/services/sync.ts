@@ -24,11 +24,15 @@ export type SyncResult = {
  * Interfaz para el cliente de envío remoto (Supabase, API REST o Mock en pruebas).
  */
 export interface RemoteSyncProvider {
-  pushOperation(item: SyncQueueItem): Promise<{ success: boolean; error?: string }>;
+  pushOperation(
+    item: SyncQueueItem,
+  ): Promise<{ success: boolean; error?: string }>;
 }
 
 function isPermanentSyncRejection(message: string): boolean {
-  return /SET_NOT_ACTIVE|SET_CLOSED|GROUP_SET_LIMIT_REACHED|set (ya está cerrado|dejó de ser el set activo)|tope estricto|no pueden superar 15|no puede superar 15|active set|closed set/i.test(message);
+  return /SET_NOT_ACTIVE|SET_CLOSED|GROUP_SET_LIMIT_REACHED|set (ya está cerrado|dejó de ser el set activo)|tope estricto|no pueden superar 15|no puede superar 15|active set|closed set/i.test(
+    message,
+  );
 }
 
 /**
@@ -45,7 +49,7 @@ export const MockRemoteProvider: RemoteSyncProvider = {
  * Obtiene la lista de operaciones pendientes de sincronizar.
  */
 export async function getPendingSyncOperations(
-  db: SQLiteDatabase
+  db: SQLiteDatabase,
 ): Promise<SyncQueueItem[]> {
   const rows = await db.getAllAsync<{
     operation_id: string;
@@ -62,7 +66,7 @@ export async function getPendingSyncOperations(
     `SELECT operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at
      FROM sync_queue
      WHERE status IN ('pending', 'error') AND attempts < 5
-     ORDER BY created_at ASC`
+     ORDER BY created_at ASC`,
   );
 
   return rows.map((r) => ({
@@ -79,18 +83,56 @@ export async function getPendingSyncOperations(
   }));
 }
 
+export async function getFailedSyncOperations(
+  db: SQLiteDatabase,
+): Promise<SyncQueueItem[]> {
+  const rows = await db.getAllAsync<{
+    operation_id: string;
+    entity_type: string;
+    entity_id: string;
+    operation: string;
+    payload_json: string;
+    status: "pending" | "synced" | "error" | "conflict";
+    attempts: number;
+    last_error: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `SELECT operation_id, entity_type, entity_id, operation, payload_json,
+            status, attempts, last_error, created_at, updated_at
+     FROM sync_queue
+     WHERE status = 'error'
+     ORDER BY updated_at DESC`,
+  );
+
+  return rows.map((row) => ({
+    operationId: row.operation_id,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    operation: row.operation,
+    payloadJson: row.payload_json,
+    status: row.status,
+    attempts: row.attempts,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
 /**
  * Recopila la totalidad de registros existentes en SQLite (Torneo, Equipos, Jugadores,
  * Partidos, Sets, Eventos de Marcador, Tiempos Muertos) y los re-encola en la cola
  * con estado 'pending' e intentos en 0 para forzar una resincronización completa.
  */
-export async function requeueAndResetAllData(db: SQLiteDatabase): Promise<void> {
+export async function requeueAndResetAllData(
+  db: SQLiteDatabase,
+): Promise<void> {
   const now = new Date().toISOString();
 
   // 1. Restablecer registros previos
   await db.runAsync(
     "UPDATE sync_queue SET status = 'pending', attempts = 0, last_error = NULL, updated_at = ?",
-    now
+    now,
   );
 
   // 2. Re-encolar Torneos
@@ -113,77 +155,77 @@ export async function requeueAndResetAllData(db: SQLiteDatabase): Promise<void> 
       t.id,
       JSON.stringify(t),
       now,
-      now
+      now,
     );
   }
 
   // 3. Re-encolar Equipos
-const teams = await db.getAllAsync<{
-  id: string;
-  tournament_id: string;
-  group_id: string | null;
-  name: string;
-  captain_name: string | null;
-  contact: string | null;
-  registration_status: string;
-  payment_status: string;
-  initial_payment_status: string;
-  balance_payment_status: string;
-  initial_payment_paid_at: string | null;
-  balance_payment_paid_at: string | null;
-}>("SELECT * FROM teams");
-for (const team of teams) {
-  await db.runAsync(
-    `INSERT OR REPLACE INTO sync_queue (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
+  const teams = await db.getAllAsync<{
+    id: string;
+    tournament_id: string;
+    group_id: string | null;
+    name: string;
+    captain_name: string | null;
+    contact: string | null;
+    registration_status: string;
+    payment_status: string;
+    initial_payment_status: string;
+    balance_payment_status: string;
+    initial_payment_paid_at: string | null;
+    balance_payment_paid_at: string | null;
+  }>("SELECT * FROM teams");
+  for (const team of teams) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
      VALUES (?, 'team', ?, 'save_team', ?, 'pending', 0, NULL, ?, ?)`,
-    `requeue-team-${team.id}`,
-    team.id,
-    JSON.stringify({
-      tournamentId: team.tournament_id,
-      groupId: team.group_id, // <-- SE AGREGA EL GRUPO
-      name: team.name,
-      captainName: team.captain_name,
-      contact: team.contact,
-      registrationStatus: team.registration_status,
-      paymentStatus: team.payment_status,
-      initialPaymentStatus: team.initial_payment_status,
-      balancePaymentStatus: team.balance_payment_status,
-      initialPaymentPaidAt: team.initial_payment_paid_at,
-      balancePaymentPaidAt: team.balance_payment_paid_at,
-    }),
-    now,
-    now
-  );
-}
+      `requeue-team-${team.id}`,
+      team.id,
+      JSON.stringify({
+        tournamentId: team.tournament_id,
+        groupId: team.group_id, // <-- SE AGREGA EL GRUPO
+        name: team.name,
+        captainName: team.captain_name,
+        contact: team.contact,
+        registrationStatus: team.registration_status,
+        paymentStatus: team.payment_status,
+        initialPaymentStatus: team.initial_payment_status,
+        balancePaymentStatus: team.balance_payment_status,
+        initialPaymentPaidAt: team.initial_payment_paid_at,
+        balancePaymentPaidAt: team.balance_payment_paid_at,
+      }),
+      now,
+      now,
+    );
+  }
 
-// 4. Re-encolar asignaciones de grupo
-const memberships = await db.getAllAsync<{
-  team_id: string;
-  group_id: string;
-  group_name: "A" | "B";
-  tournament_id: string;
-}>(
-  `SELECT gm.team_id, gm.group_id, g.name AS group_name, g.tournament_id
+  // 4. Re-encolar asignaciones de grupo
+  const memberships = await db.getAllAsync<{
+    team_id: string;
+    group_id: string;
+    group_name: "A" | "B";
+    tournament_id: string;
+  }>(
+    `SELECT gm.team_id, gm.group_id, g.name AS group_name, g.tournament_id
    FROM group_memberships gm
-   JOIN groups g ON g.id = gm.group_id`
-);
-for (const membership of memberships) {
-  await db.runAsync(
-    `INSERT OR REPLACE INTO sync_queue
+   JOIN groups g ON g.id = gm.group_id`,
+  );
+  for (const membership of memberships) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO sync_queue
      (operation_id, entity_type, entity_id, operation, payload_json, status, attempts, last_error, created_at, updated_at)
      VALUES (?, 'group_membership', ?, 'save_group_membership', ?, 'pending', 0, NULL, ?, ?)`,
-    `requeue-group-membership-${membership.team_id}`,
-    membership.team_id,
-    JSON.stringify({
-      tournamentId: membership.tournament_id,
-      teamId: membership.team_id,
-      groupId: membership.group_id,
-      groupName: membership.group_name,
-    }),
-    now,
-    now
-  );
-}
+      `requeue-group-membership-${membership.team_id}`,
+      membership.team_id,
+      JSON.stringify({
+        tournamentId: membership.tournament_id,
+        teamId: membership.team_id,
+        groupId: membership.group_id,
+        groupName: membership.group_name,
+      }),
+      now,
+      now,
+    );
+  }
 
   const qualificationResolutions = await db.getAllAsync<{
     id: string;
@@ -207,7 +249,9 @@ for (const membership of memberships) {
         id: resolution.id,
         tournamentId: resolution.tournament_id,
         groupId: resolution.group_id,
-        affectedTeamIds: JSON.parse(resolution.affected_team_ids_json) as string[],
+        affectedTeamIds: JSON.parse(
+          resolution.affected_team_ids_json,
+        ) as string[],
         qualifiedTeamId: resolution.qualified_team_id,
         criterion: resolution.criterion,
         decidedBy: resolution.decided_by,
@@ -219,7 +263,7 @@ for (const membership of memberships) {
     );
   }
 
-// 5. Re-encolar Jugadores
+  // 5. Re-encolar Jugadores
   const players = await db.getAllAsync<{
     id: string;
     team_id: string;
@@ -242,7 +286,7 @@ for (const membership of memberships) {
         eligibility: p.eligibility_status,
       }),
       now,
-      now
+      now,
     );
   }
 
@@ -278,7 +322,7 @@ for (const membership of memberships) {
         currentSet: m.current_set,
       }),
       now,
-      now
+      now,
     );
   }
 
@@ -304,7 +348,7 @@ for (const membership of memberships) {
         closedAt: s.closed_at,
       }),
       now,
-      now
+      now,
     );
   }
 
@@ -333,7 +377,7 @@ for (const membership of memberships) {
         createdAt: e.created_at,
       }),
       now,
-      now
+      now,
     );
   }
 
@@ -357,7 +401,7 @@ for (const membership of memberships) {
         usedAt: to.used_at,
       }),
       now,
-      now
+      now,
     );
   }
 
@@ -368,7 +412,9 @@ for (const membership of memberships) {
     position: number;
     player_id: string;
     initial_position: number;
-  }>("SELECT match_id, set_number, team, position, player_id, initial_position FROM match_lineups");
+  }>(
+    "SELECT match_id, set_number, team, position, player_id, initial_position FROM match_lineups",
+  );
   for (const team of ["home", "away"] as const) {
     const grouped = new Map<string, typeof lineups>();
     for (const lineup of lineups.filter((row) => row.team === team)) {
@@ -386,7 +432,9 @@ for (const membership of memberships) {
         rotation_number: number;
       }>(
         "SELECT server_player_id, server_position, is_serving, rotation_number FROM set_alignment_state WHERE match_id = ? AND set_number = ? AND team = ?",
-        rows[0].match_id, rows[0].set_number, team,
+        rows[0].match_id,
+        rows[0].set_number,
+        team,
       );
       if (!state) continue;
       await db.runAsync(
@@ -399,7 +447,11 @@ for (const membership of memberships) {
           matchId: rows[0].match_id,
           setNumber: rows[0].set_number,
           team,
-          lineup: rows.map((row) => ({ playerId: row.player_id, position: row.position, initialPosition: row.initial_position })),
+          lineup: rows.map((row) => ({
+            playerId: row.player_id,
+            position: row.position,
+            initialPosition: row.initial_position,
+          })),
           serverPlayerId: state.server_player_id,
           serverPosition: state.server_position,
           isServing: state.is_serving === 1,
@@ -446,7 +498,9 @@ for (const membership of memberships) {
         awardedTo: fault.awarded_to,
         sanctionApplied: fault.sanction_applied === 1,
         occurredAt: fault.occurred_at,
-        pointsToAnnul: fault.points_to_annul_json ? JSON.parse(fault.points_to_annul_json) as string[] : [],
+        pointsToAnnul: fault.points_to_annul_json
+          ? (JSON.parse(fault.points_to_annul_json) as string[])
+          : [],
         correctionOfId: fault.correction_of_id,
         createdAt: fault.created_at,
       }),
@@ -515,7 +569,11 @@ for (const membership of memberships) {
   for (const walkover of walkovers) {
     const confirmed = walkover.status === "confirmed";
     const match = confirmed
-      ? await db.getFirstAsync<{ winner: "home" | "away"; walkover_team_id: string; updated_at: string }>(
+      ? await db.getFirstAsync<{
+          winner: "home" | "away";
+          walkover_team_id: string;
+          updated_at: string;
+        }>(
           "SELECT winner, walkover_team_id, updated_at FROM matches WHERE id = ?",
           walkover.match_id,
         )
@@ -534,14 +592,24 @@ for (const membership of memberships) {
       walkover.id,
       confirmed ? "confirm_walkover" : "start_walkover_call",
       JSON.stringify({
-        id: walkover.id, matchId: walkover.match_id, absentTeam: walkover.absent_team,
-        calledAt: walkover.called_at, waitDeadline: walkover.wait_deadline,
-        confirmedAt: walkover.confirmed_at, refereeDecisionBy: walkover.referee_decision_by,
+        id: walkover.id,
+        matchId: walkover.match_id,
+        absentTeam: walkover.absent_team,
+        calledAt: walkover.called_at,
+        waitDeadline: walkover.wait_deadline,
+        confirmedAt: walkover.confirmed_at,
+        refereeDecisionBy: walkover.referee_decision_by,
         refereeConfirmedAt: walkover.referee_confirmed_at,
-        homePresentCount: walkover.home_present_count, awayPresentCount: walkover.away_present_count,
-        playerConditionNote: walkover.player_condition_note, status: walkover.status,
-        winner: match?.winner, absentTeamId: match?.walkover_team_id,
-        sets: sets.map((set) => ({ home: set.home_points, away: set.away_points })),
+        homePresentCount: walkover.home_present_count,
+        awayPresentCount: walkover.away_present_count,
+        playerConditionNote: walkover.player_condition_note,
+        status: walkover.status,
+        winner: match?.winner,
+        absentTeamId: match?.walkover_team_id,
+        sets: sets.map((set) => ({
+          home: set.home_points,
+          away: set.away_points,
+        })),
         createdAt: walkover.created_at,
       }),
       now,
@@ -550,13 +618,33 @@ for (const membership of memberships) {
   }
 }
 
+export async function retryFailedSyncOperations(
+  db: SQLiteDatabase,
+): Promise<number> {
+  const now = new Date().toISOString();
+
+  const result = await db.runAsync(
+    `UPDATE sync_queue
+     SET status = 'pending',
+         attempts = 0,
+         last_error = NULL,
+         updated_at = ?
+     WHERE status = 'error'
+       AND entity_type = 'match_set'
+       AND operation = 'save_set'`,
+    now,
+  );
+
+  return result.changes;
+}
+
 /**
  * Procesa la cola offline de SQLite enviando cada elemento al servidor.
  */
 // The provider is required: a default mock would mark the queue as synced without sending anything
 export async function processSyncQueue(
   db: SQLiteDatabase,
-  provider: RemoteSyncProvider
+  provider: RemoteSyncProvider,
 ): Promise<SyncResult> {
   const items = await getPendingSyncOperations(db);
   const result: SyncResult = {
@@ -571,18 +659,29 @@ export async function processSyncQueue(
     try {
       const response = await provider.pushOperation(item);
 
+      if (item.operation === "save_lineup") {
+        console.log("[GAMMA_SERVE_TRACE] resultado al subir alineación", {
+          operationId: item.operationId,
+          entityId: item.entityId,
+          success: response.success,
+          error: response.error ?? null,
+        });
+      }
       if (response.success) {
         await db.runAsync(
           `UPDATE sync_queue
            SET status = 'synced', attempts = attempts + 1, last_error = NULL, updated_at = ?
            WHERE operation_id = ?`,
           now,
-          item.operationId
+          item.operationId,
         );
         result.successCount++;
       } else {
-        const errorMsg = response.error ?? "Error desconocido en el servidor remoto.";
-        const status = isPermanentSyncRejection(errorMsg) ? "conflict" : "error";
+        const errorMsg =
+          response.error ?? "Error desconocido en el servidor remoto.";
+        const status = isPermanentSyncRejection(errorMsg)
+          ? "conflict"
+          : "error";
         await db.runAsync(
           `UPDATE sync_queue
            SET status = ?, attempts = attempts + 1, last_error = ?, updated_at = ?
@@ -590,13 +689,14 @@ export async function processSyncQueue(
           status,
           errorMsg,
           now,
-          item.operationId
+          item.operationId,
         );
         result.failedCount++;
         result.errors.push({ operationId: item.operationId, error: errorMsg });
       }
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : "Error grave de conexión.";
+      const errorMsg =
+        err instanceof Error ? err.message : "Error grave de conexión.";
       const status = isPermanentSyncRejection(errorMsg) ? "conflict" : "error";
       await db.runAsync(
         `UPDATE sync_queue
@@ -605,7 +705,7 @@ export async function processSyncQueue(
         status,
         errorMsg,
         now,
-        item.operationId
+        item.operationId,
       );
       result.failedCount++;
       result.errors.push({ operationId: item.operationId, error: errorMsg });
@@ -624,13 +724,13 @@ export async function getSyncQueueStats(db: SQLiteDatabase): Promise<{
   errorCount: number;
 }> {
   const pending = await db.getFirstAsync<{ count: number }>(
-    "SELECT COUNT(*) AS count FROM sync_queue WHERE status = 'pending'"
+    "SELECT COUNT(*) AS count FROM sync_queue WHERE status = 'pending'",
   );
   const synced = await db.getFirstAsync<{ count: number }>(
-    "SELECT COUNT(*) AS count FROM sync_queue WHERE status = 'synced'"
+    "SELECT COUNT(*) AS count FROM sync_queue WHERE status = 'synced'",
   );
   const error = await db.getFirstAsync<{ count: number }>(
-    "SELECT COUNT(*) AS count FROM sync_queue WHERE status = 'error'"
+    "SELECT COUNT(*) AS count FROM sync_queue WHERE status = 'error'",
   );
 
   return {

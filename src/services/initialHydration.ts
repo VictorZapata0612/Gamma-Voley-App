@@ -1,6 +1,13 @@
 import type { SQLiteDatabase } from "expo-sqlite";
-import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
+import {
+  DEFAULT_TOURNAMENT_ID,
+  withDatabaseTransaction,
+} from "@/database/sqlite";
 import { supabase } from "./supabase";
+import {
+  GROUP_SIZE,
+  TOURNAMENT_TEAM_COUNT,
+} from "@/domain/schedule";
 
 type RemoteRow = Record<string, unknown>;
 
@@ -16,6 +23,11 @@ type HydrationResult = {
     timeouts: number;
   };
 };
+
+const pendingHydrations = new WeakMap<
+  SQLiteDatabase,
+  Promise<HydrationResult>
+>();
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -52,41 +64,114 @@ async function fetchRows(
   return (data ?? []) as RemoteRow[];
 }
 
-export async function hydrateDefaultTournament(
+async function hydrateDefaultTournamentOnce(
   db: SQLiteDatabase,
 ): Promise<HydrationResult> {
-  const [tournaments, teams, groups, matches] = await Promise.all([
-    fetchRows("tournaments", { column: "id", value: DEFAULT_TOURNAMENT_ID }),
-    fetchRows("teams", { column: "tournament_id", value: DEFAULT_TOURNAMENT_ID }),
-    fetchRows("groups", { column: "tournament_id", value: DEFAULT_TOURNAMENT_ID }),
-    fetchRows("matches", { column: "tournament_id", value: DEFAULT_TOURNAMENT_ID }),
-  ]);
-  if (tournaments.length === 0) {
-    throw new Error(`No se encontró el torneo ${DEFAULT_TOURNAMENT_ID} en Supabase.`);
+  const localData = await db.getFirstAsync<{
+    teams: number;
+    groupMatches: number;
+  }>(
+    `SELECT
+       (SELECT COUNT(*) FROM teams WHERE tournament_id = ?) AS teams,
+       (SELECT COUNT(*) FROM matches
+        WHERE tournament_id = ? AND phase = 'group') AS groupMatches`,
+    DEFAULT_TOURNAMENT_ID,
+    DEFAULT_TOURNAMENT_ID,
+  );
+
+  const expectedGroupMatches = GROUP_SIZE * (GROUP_SIZE - 1);
+
+  if (
+    (localData?.teams ?? 0) >= TOURNAMENT_TEAM_COUNT &&
+    (localData?.groupMatches ?? 0) >= expectedGroupMatches
+  ) {
+    return {
+      hydrated: false,
+      counts: {
+        teams: 0,
+        players: 0,
+        groups: 0,
+        matches: 0,
+        sets: 0,
+        events: 0,
+        timeouts: 0,
+      },
+    };
   }
 
-  const teamIds = teams.map((team) => requiredString(team.id, "teams.id"));
-  const matchIds = matches.map((match) => requiredString(match.id, "matches.id"));
-  const [players, memberships, sets, events, timeouts, walkovers] = await Promise.all([
-    fetchRows("players", { column: "team_id", values: teamIds }),
-    fetchRows("group_memberships", { column: "team_id", values: teamIds }),
-    fetchRows("match_sets", { column: "match_id", values: matchIds }),
-    fetchRows("score_events", { column: "match_id", values: matchIds }),
-    fetchRows("timeouts", { column: "match_id", values: matchIds }),
-    fetchRows("walkover_events", { column: "match_id", values: matchIds }),
+  const [tournaments, teams, groups, matches] = await Promise.all([
+    fetchRows("tournaments", {
+      column: "id",
+      value: DEFAULT_TOURNAMENT_ID,
+    }),
+    fetchRows("teams", {
+      column: "tournament_id",
+      value: DEFAULT_TOURNAMENT_ID,
+    }),
+    fetchRows("groups", {
+      column: "tournament_id",
+      value: DEFAULT_TOURNAMENT_ID,
+    }),
+    fetchRows("matches", {
+      column: "tournament_id",
+      value: DEFAULT_TOURNAMENT_ID,
+    }),
   ]);
+
+  if (tournaments.length === 0) {
+    throw new Error(
+      `No se encontró el torneo ${DEFAULT_TOURNAMENT_ID} en Supabase.`,
+    );
+  }
+
+  const teamIds = teams.map((team) =>
+    requiredString(team.id, "teams.id"),
+  );
+  const matchIds = matches.map((match) =>
+    requiredString(match.id, "matches.id"),
+  );
+
+  const [players, memberships, sets, events, timeouts, walkovers] =
+    await Promise.all([
+      fetchRows("players", {
+        column: "team_id",
+        values: teamIds,
+      }),
+      fetchRows("group_memberships", {
+        column: "team_id",
+        values: teamIds,
+      }),
+      fetchRows("match_sets", {
+        column: "match_id",
+        values: matchIds,
+      }),
+      fetchRows("score_events", {
+        column: "match_id",
+        values: matchIds,
+      }),
+      fetchRows("timeouts", {
+        column: "match_id",
+        values: matchIds,
+      }),
+      fetchRows("walkover_events", {
+        column: "match_id",
+        values: matchIds,
+      }),
+    ]);
+
   const resolutions = await fetchRows("qualification_resolutions", {
     column: "tournament_id",
     value: DEFAULT_TOURNAMENT_ID,
   });
 
   const now = new Date().toISOString();
-  await db.execAsync("BEGIN TRANSACTION;");
-  try {
+
+  return withDatabaseTransaction(db, async () => {
     for (const tournament of tournaments) {
       await db.runAsync(
         `INSERT OR IGNORE INTO tournaments
-          (id, name, category, starts_on, ends_on, max_teams, court_count, created_at, updated_at)
+          (id, name, category, starts_on, ends_on, max_teams, court_count,
+           created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         requiredString(tournament.id, "tournaments.id"),
         requiredString(tournament.name, "tournaments.name"),
@@ -112,9 +197,10 @@ export async function hydrateDefaultTournament(
     for (const team of teams) {
       await db.runAsync(
         `INSERT OR IGNORE INTO teams
-          (id, tournament_id, name, captain_name, contact, registration_status, payment_status,
-           initial_payment_status, balance_payment_status, initial_payment_paid_at, balance_payment_paid_at,
-           created_at, updated_at)
+          (id, tournament_id, name, captain_name, contact,
+           registration_status, payment_status, initial_payment_status,
+           balance_payment_status, initial_payment_paid_at,
+           balance_payment_paid_at, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         requiredString(team.id, "teams.id"),
         requiredString(team.tournament_id, "teams.tournament_id"),
@@ -125,10 +211,14 @@ export async function hydrateDefaultTournament(
         requiredString(team.payment_status, "teams.payment_status"),
         typeof team.initial_payment_status === "string"
           ? team.initial_payment_status
-          : team.payment_status === "paid" ? "paid" : "pending",
+          : team.payment_status === "paid"
+            ? "paid"
+            : "pending",
         typeof team.balance_payment_status === "string"
           ? team.balance_payment_status
-          : team.payment_status === "paid" ? "paid" : "pending",
+          : team.payment_status === "paid"
+            ? "paid"
+            : "pending",
         nullableString(team.initial_payment_paid_at),
         nullableString(team.balance_payment_paid_at),
         nullableString(team.created_at) ?? now,
@@ -147,13 +237,16 @@ export async function hydrateDefaultTournament(
     for (const player of players) {
       await db.runAsync(
         `INSERT OR IGNORE INTO players
-          (id, team_id, name, gender, jersey_number, eligibility_status, created_at, updated_at)
+          (id, team_id, name, gender, jersey_number, eligibility_status,
+           created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         requiredString(player.id, "players.id"),
         requiredString(player.team_id, "players.team_id"),
         requiredString(player.name, "players.name"),
         requiredString(player.gender, "players.gender"),
-        typeof player.jersey_number === "number" ? player.jersey_number : null,
+        typeof player.jersey_number === "number"
+          ? player.jersey_number
+          : null,
         requiredString(player.eligibility_status, "players.eligibility_status"),
         nullableString(player.created_at) ?? now,
         nullableString(player.updated_at) ?? now,
@@ -169,12 +262,15 @@ export async function hydrateDefaultTournament(
         )
       ).map((row) => row.entity_id),
     );
+
     for (const resolution of resolutions) {
       if (pendingResolutionIds.has(String(resolution.id))) continue;
+
       await db.runAsync(
         `INSERT OR REPLACE INTO qualification_resolutions
-          (id, tournament_id, group_id, affected_team_ids_json, qualified_team_id,
-           criterion, decided_by, decided_at, created_at, updated_at)
+          (id, tournament_id, group_id, affected_team_ids_json,
+           qualified_team_id, criterion, decided_by, decided_at,
+           created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         requiredString(resolution.id, "qualification_resolutions.id"),
         requiredString(resolution.tournament_id, "qualification_resolutions.tournament_id"),
@@ -192,8 +288,9 @@ export async function hydrateDefaultTournament(
     for (const match of matches) {
       await db.runAsync(
         `INSERT OR IGNORE INTO matches
-          (id, tournament_id, phase, group_id, home_team_id, away_team_id, court_number,
-           scheduled_at, status, winner, walkover_team_id, current_set, created_at, updated_at)
+          (id, tournament_id, phase, group_id, home_team_id, away_team_id,
+           court_number, scheduled_at, status, winner, walkover_team_id,
+           current_set, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         requiredString(match.id, "matches.id"),
         requiredString(match.tournament_id, "matches.tournament_id"),
@@ -201,7 +298,9 @@ export async function hydrateDefaultTournament(
         nullableString(match.group_id),
         requiredString(match.home_team_id, "matches.home_team_id"),
         requiredString(match.away_team_id, "matches.away_team_id"),
-        typeof match.court_number === "number" ? match.court_number : null,
+        typeof match.court_number === "number"
+          ? match.court_number
+          : null,
         nullableString(match.scheduled_at),
         requiredString(match.status, "matches.status"),
         nullableString(match.winner),
@@ -255,9 +354,10 @@ export async function hydrateDefaultTournament(
     for (const walkover of walkovers) {
       await db.runAsync(
         `INSERT OR IGNORE INTO walkover_events
-          (id, match_id, absent_team, called_at, wait_deadline, confirmed_at,
-           referee_decision_by, referee_confirmed_at, home_present_count,
-           away_present_count, player_condition_note, status, created_at)
+          (id, match_id, absent_team, called_at, wait_deadline,
+           confirmed_at, referee_decision_by, referee_confirmed_at,
+           home_present_count, away_present_count, player_condition_note,
+           status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         requiredString(walkover.id, "walkover_events.id"),
         requiredString(walkover.match_id, "walkover_events.match_id"),
@@ -267,30 +367,47 @@ export async function hydrateDefaultTournament(
         nullableString(walkover.confirmed_at),
         nullableString(walkover.referee_decision_by),
         nullableString(walkover.referee_confirmed_at),
-        typeof walkover.home_present_count === "number" ? walkover.home_present_count : null,
-        typeof walkover.away_present_count === "number" ? walkover.away_present_count : null,
+        typeof walkover.home_present_count === "number"
+          ? walkover.home_present_count
+          : null,
+        typeof walkover.away_present_count === "number"
+          ? walkover.away_present_count
+          : null,
         nullableString(walkover.player_condition_note),
         requiredString(walkover.status, "walkover_events.status"),
         nullableString(walkover.created_at) ?? now,
       );
     }
 
-    await db.execAsync("COMMIT;");
-  } catch (error) {
-    await db.execAsync("ROLLBACK;");
-    throw error;
-  }
+    return {
+      hydrated: true,
+      counts: {
+        teams: teams.length,
+        players: players.length,
+        groups: groups.length,
+        matches: matches.length,
+        sets: sets.length,
+        events: events.length,
+        timeouts: timeouts.length,
+      },
+    };
+  });
+}
 
-  return {
-    hydrated: true,
-    counts: {
-      teams: teams.length,
-      players: players.length,
-      groups: groups.length,
-      matches: matches.length,
-      sets: sets.length,
-      events: events.length,
-      timeouts: timeouts.length,
-    },
-  };
+export function hydrateDefaultTournament(
+  db: SQLiteDatabase,
+): Promise<HydrationResult> {
+  const existing = pendingHydrations.get(db);
+  if (existing) return existing;
+
+  let pending!: Promise<HydrationResult>;
+
+  pending = hydrateDefaultTournamentOnce(db).finally(() => {
+    if (pendingHydrations.get(db) === pending) {
+      pendingHydrations.delete(db);
+    }
+  });
+
+  pendingHydrations.set(db, pending);
+  return pending;
 }

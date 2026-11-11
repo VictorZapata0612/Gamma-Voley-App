@@ -107,6 +107,12 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
   private async ensureTeamExists(teamId: string): Promise<void> {
     const id = requiredString(teamId, "teamId");
 
+    // Este método solo asegura la existencia necesaria para otras operaciones.
+    // No reescribe un equipo que ya existe en Supabase.
+    if (await this.remoteRowExists("teams", id)) {
+      return;
+    }
+
     if (this.db) {
       const team = await this.db.getFirstAsync<JsonRecord>(
         "SELECT * FROM teams WHERE id = ?",
@@ -134,8 +140,6 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
         return;
       }
     }
-
-    if (await this.remoteRowExists("teams", id)) return;
 
     throw new Error(
       `No existe el equipo ${id} en la base local ni en Supabase.`,
@@ -295,7 +299,9 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
           requiredNumber(awayPoints, "score.away"),
         ) > 15
       ) {
-        throw new Error("Los sets 1 y 2 de grupos no pueden superar 15 puntos.");
+        throw new Error(
+          "Los sets 1 y 2 de grupos no pueden superar 15 puntos.",
+        );
       }
 
       await this.upsert("score_events", {
@@ -352,7 +358,6 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
       }
     }
 
-
     if (isCorrection) {
       const auditId = `audit-${eventId}`;
       const auditTimestamp = payload.timestamp ?? item.createdAt;
@@ -389,7 +394,6 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
         created_at: auditTimestamp,
       });
     }
-
   }
 
   async pushOperation(
@@ -430,133 +434,225 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
       }
 
       // Equipo
-// Equipo
-if (item.entityType === "team" || item.operation === "save_team") {
-  const tournamentId = requiredString(
-    payload.tournamentId ?? payload.tournament_id ?? "gamma-voley-2026",
-    "team.tournamentId"
-  );
+      // Equipo
+      if (item.entityType === "team" || item.operation === "save_team") {
+        const tournamentId = requiredString(
+          payload.tournamentId ?? payload.tournament_id ?? "gamma-voley-2026",
+          "team.tournamentId",
+        );
 
-  await this.ensureTournamentExists(tournamentId);
+        await this.ensureTournamentExists(tournamentId);
 
-  await this.upsert("teams", {
-    id: requiredString(payload.id ?? item.entityId, "team.id"),
-    tournament_id: tournamentId,
-    group_id: payload.groupId ?? payload.group_id ?? null, // <-- SE AGREGA EL GRUPO
-    name: requiredString(payload.name, "team.name"),
-    captain_name: payload.captainName ?? payload.captain_name ?? null,
-    contact: payload.contact ?? null,
-    registration_status:
-      payload.registrationStatus ??
-      payload.registration_status ??
-      "pending",
-    payment_status:
-      payload.paymentStatus ?? payload.payment_status ?? "pending",
-    initial_payment_status:
-      payload.initialPaymentStatus ?? payload.initial_payment_status ??
-      (payload.paymentStatus === "paid" ? "paid" : "pending"),
-    balance_payment_status:
-      payload.balancePaymentStatus ?? payload.balance_payment_status ??
-      (payload.paymentStatus === "paid" ? "paid" : "pending"),
-    initial_payment_paid_at: payload.initialPaymentPaidAt ?? payload.initial_payment_paid_at ?? null,
-    balance_payment_paid_at: payload.balancePaymentPaidAt ?? payload.balance_payment_paid_at ?? null,
-    created_at: payload.createdAt ?? payload.created_at,
-    updated_at: payload.updatedAt ?? payload.updated_at ?? item.updatedAt,
-  });
-  return { success: true };
-}
+        await this.upsert("teams", {
+          id: requiredString(payload.id ?? item.entityId, "team.id"),
+          tournament_id: tournamentId,
+          group_id: payload.groupId ?? payload.group_id ?? null, // <-- SE AGREGA EL GRUPO
+          name: requiredString(payload.name, "team.name"),
+          captain_name: payload.captainName ?? payload.captain_name ?? null,
+          contact: payload.contact ?? null,
+          registration_status:
+            payload.registrationStatus ??
+            payload.registration_status ??
+            "pending",
+          payment_status:
+            payload.paymentStatus ?? payload.payment_status ?? "pending",
+          initial_payment_status:
+            payload.initialPaymentStatus ??
+            payload.initial_payment_status ??
+            (payload.paymentStatus === "paid" ? "paid" : "pending"),
+          balance_payment_status:
+            payload.balancePaymentStatus ??
+            payload.balance_payment_status ??
+            (payload.paymentStatus === "paid" ? "paid" : "pending"),
+          initial_payment_paid_at:
+            payload.initialPaymentPaidAt ??
+            payload.initial_payment_paid_at ??
+            null,
+          balance_payment_paid_at:
+            payload.balancePaymentPaidAt ??
+            payload.balance_payment_paid_at ??
+            null,
+          created_at: payload.createdAt ?? payload.created_at,
+          updated_at: payload.updatedAt ?? payload.updated_at ?? item.updatedAt,
+        });
+        return { success: true };
+      }
 
       if (item.operation === "start_walkover_call") {
-        await this.ensureMatchExists(requiredString(payload.matchId ?? payload.match_id, "walkover.matchId"));
-        await this.upsert("walkover_events", {
-          id: requiredString(payload.id ?? item.entityId, "walkover.id"),
-          match_id: requiredString(payload.matchId ?? payload.match_id, "walkover.matchId"),
-          absent_team: requiredString(payload.absentTeam ?? payload.absent_team, "walkover.absentTeam"),
-          called_at: requiredString(payload.calledAt ?? payload.called_at, "walkover.calledAt"),
-          wait_deadline: requiredString(payload.waitDeadline ?? payload.wait_deadline, "walkover.waitDeadline"),
-          status: payload.status ?? "called",
-          created_at: payload.createdAt ?? payload.created_at ?? item.createdAt,
-        }, "match_id");
+        await this.ensureMatchExists(
+          requiredString(
+            payload.matchId ?? payload.match_id,
+            "walkover.matchId",
+          ),
+        );
+        await this.upsert(
+          "walkover_events",
+          {
+            id: requiredString(payload.id ?? item.entityId, "walkover.id"),
+            match_id: requiredString(
+              payload.matchId ?? payload.match_id,
+              "walkover.matchId",
+            ),
+            absent_team: requiredString(
+              payload.absentTeam ?? payload.absent_team,
+              "walkover.absentTeam",
+            ),
+            called_at: requiredString(
+              payload.calledAt ?? payload.called_at,
+              "walkover.calledAt",
+            ),
+            wait_deadline: requiredString(
+              payload.waitDeadline ?? payload.wait_deadline,
+              "walkover.waitDeadline",
+            ),
+            status: payload.status ?? "called",
+            created_at:
+              payload.createdAt ?? payload.created_at ?? item.createdAt,
+          },
+          "match_id",
+        );
         return { success: true };
       }
 
       if (item.operation === "confirm_walkover") {
-        const matchId = requiredString(payload.matchId ?? payload.match_id, "walkover.matchId");
+        const matchId = requiredString(
+          payload.matchId ?? payload.match_id,
+          "walkover.matchId",
+        );
         await this.ensureMatchExists(matchId);
-        await this.upsert("walkover_events", {
-          id: requiredString(payload.id ?? item.entityId, "walkover.id"),
-          match_id: matchId,
-          absent_team: requiredString(payload.absentTeam ?? payload.absent_team, "walkover.absentTeam"),
-          called_at: requiredString(payload.calledAt ?? payload.called_at, "walkover.calledAt"),
-          wait_deadline: requiredString(payload.waitDeadline ?? payload.wait_deadline, "walkover.waitDeadline"),
-          confirmed_at: requiredString(payload.confirmedAt ?? payload.confirmed_at, "walkover.confirmedAt"),
-          referee_decision_by: requiredString(payload.refereeDecisionBy ?? payload.referee_decision_by, "walkover.refereeDecisionBy"),
-          referee_confirmed_at: requiredString(payload.refereeConfirmedAt ?? payload.referee_confirmed_at, "walkover.refereeConfirmedAt"),
-          home_present_count: requiredNumber(payload.homePresentCount ?? payload.home_present_count, "walkover.homePresentCount"),
-          away_present_count: requiredNumber(payload.awayPresentCount ?? payload.away_present_count, "walkover.awayPresentCount"),
-          player_condition_note: requiredString(payload.playerConditionNote ?? payload.player_condition_note, "walkover.playerConditionNote"),
-          status: "confirmed",
-          created_at: payload.createdAt ?? payload.created_at ?? item.createdAt,
-        }, "match_id");
-        const sets = Array.isArray(payload.sets) ? payload.sets as { home: number; away: number }[] : [];
+        await this.upsert(
+          "walkover_events",
+          {
+            id: requiredString(payload.id ?? item.entityId, "walkover.id"),
+            match_id: matchId,
+            absent_team: requiredString(
+              payload.absentTeam ?? payload.absent_team,
+              "walkover.absentTeam",
+            ),
+            called_at: requiredString(
+              payload.calledAt ?? payload.called_at,
+              "walkover.calledAt",
+            ),
+            wait_deadline: requiredString(
+              payload.waitDeadline ?? payload.wait_deadline,
+              "walkover.waitDeadline",
+            ),
+            confirmed_at: requiredString(
+              payload.confirmedAt ?? payload.confirmed_at,
+              "walkover.confirmedAt",
+            ),
+            referee_decision_by: requiredString(
+              payload.refereeDecisionBy ?? payload.referee_decision_by,
+              "walkover.refereeDecisionBy",
+            ),
+            referee_confirmed_at: requiredString(
+              payload.refereeConfirmedAt ?? payload.referee_confirmed_at,
+              "walkover.refereeConfirmedAt",
+            ),
+            home_present_count: requiredNumber(
+              payload.homePresentCount ?? payload.home_present_count,
+              "walkover.homePresentCount",
+            ),
+            away_present_count: requiredNumber(
+              payload.awayPresentCount ?? payload.away_present_count,
+              "walkover.awayPresentCount",
+            ),
+            player_condition_note: requiredString(
+              payload.playerConditionNote ?? payload.player_condition_note,
+              "walkover.playerConditionNote",
+            ),
+            status: "confirmed",
+            created_at:
+              payload.createdAt ?? payload.created_at ?? item.createdAt,
+          },
+          "match_id",
+        );
+        const sets = Array.isArray(payload.sets)
+          ? (payload.sets as { home: number; away: number }[])
+          : [];
         for (const [index, set] of sets.entries()) {
-          await this.upsert("match_sets", {
-            match_id: matchId, set_number: index + 1,
-            home_points: requiredNumber(set.home, `walkover.sets[${index}].home`),
-            away_points: requiredNumber(set.away, `walkover.sets[${index}].away`),
-            closed_at: payload.confirmedAt ?? item.updatedAt,
-          }, "match_id,set_number");
+          await this.upsert(
+            "match_sets",
+            {
+              match_id: matchId,
+              set_number: index + 1,
+              home_points: requiredNumber(
+                set.home,
+                `walkover.sets[${index}].home`,
+              ),
+              away_points: requiredNumber(
+                set.away,
+                `walkover.sets[${index}].away`,
+              ),
+              closed_at: payload.confirmedAt ?? item.updatedAt,
+            },
+            "match_id,set_number",
+          );
         }
-        const { error: matchUpdateError } = await supabase.from("matches").update({
-          status: "walkover",
-          winner: requiredString(payload.winner, "walkover.winner"),
-          walkover_team_id: requiredString(payload.absentTeamId ?? payload.absent_team_id, "walkover.absentTeamId"),
-          current_set: Math.max(sets.length, 1),
-          updated_at: payload.confirmedAt ?? item.updatedAt,
-        }).eq("id", matchId);
+        const { error: matchUpdateError } = await supabase
+          .from("matches")
+          .update({
+            status: "walkover",
+            winner: requiredString(payload.winner, "walkover.winner"),
+            walkover_team_id: requiredString(
+              payload.absentTeamId ?? payload.absent_team_id,
+              "walkover.absentTeamId",
+            ),
+            current_set: Math.max(sets.length, 1),
+            updated_at: payload.confirmedAt ?? item.updatedAt,
+          })
+          .eq("id", matchId);
         throwIfError(matchUpdateError);
         return { success: true };
       }
 
       // Asignación de equipo a grupo
       if (
- item.entityType === "group_membership" ||
- item.operation === "save_group_membership"
+        item.entityType === "group_membership" ||
+        item.operation === "save_group_membership"
       ) {
- const tournamentId = requiredString(
-   payload.tournamentId ?? payload.tournament_id,
-   "groupMembership.tournamentId",
- );
- const teamId = requiredString(
-   payload.teamId ?? payload.team_id ?? item.entityId,
-   "groupMembership.teamId",
- );
- const groupId = requiredString(
-   payload.groupId ?? payload.group_id,
-   "groupMembership.groupId",
- );
- const groupName = payload.groupName ?? payload.group_name;
- if (groupName !== "A" && groupName !== "B") {
-   throw new Error("groupMembership.groupName debe ser A o B.");
- }
+        const tournamentId = requiredString(
+          payload.tournamentId ?? payload.tournament_id,
+          "groupMembership.tournamentId",
+        );
+        const teamId = requiredString(
+          payload.teamId ?? payload.team_id ?? item.entityId,
+          "groupMembership.teamId",
+        );
+        const groupId = requiredString(
+          payload.groupId ?? payload.group_id,
+          "groupMembership.groupId",
+        );
+        const groupName = payload.groupName ?? payload.group_name;
+        if (groupName !== "A" && groupName !== "B") {
+          throw new Error("groupMembership.groupName debe ser A o B.");
+        }
 
- await this.ensureTournamentExists(tournamentId);
- await this.ensureTeamExists(teamId);
- await this.upsert("groups", {
-   id: groupId,
-   tournament_id: tournamentId,
-   name: groupName,
- }, "id");
- const { error: deleteError } = await supabase
-   .from("group_memberships")
-   .delete()
-   .eq("team_id", teamId);
- throwIfError(deleteError);
- await this.upsert("group_memberships", {
-   group_id: groupId,
-   team_id: teamId,
- }, "group_id,team_id");
- return { success: true };
+        await this.ensureTournamentExists(tournamentId);
+        await this.ensureTeamExists(teamId);
+        await this.upsert(
+          "groups",
+          {
+            id: groupId,
+            tournament_id: tournamentId,
+            name: groupName,
+          },
+          "id",
+        );
+        const { error: deleteError } = await supabase
+          .from("group_memberships")
+          .delete()
+          .eq("team_id", teamId);
+        throwIfError(deleteError);
+        await this.upsert(
+          "group_memberships",
+          {
+            group_id: groupId,
+            team_id: teamId,
+          },
+          "group_id,team_id",
+        );
+        return { success: true };
       }
 
       if (
@@ -571,33 +667,54 @@ if (item.entityType === "team" || item.operation === "save_team") {
           payload.groupId ?? payload.group_id,
           "qualificationResolution.groupId",
         );
-        const affectedTeamIds = payload.affectedTeamIds ?? payload.affected_team_ids;
+        const affectedTeamIds =
+          payload.affectedTeamIds ?? payload.affected_team_ids;
         if (
           !Array.isArray(affectedTeamIds) ||
           affectedTeamIds.length < 2 ||
           affectedTeamIds.some((teamId) => typeof teamId !== "string")
         ) {
-          throw new Error("qualificationResolution.affectedTeamIds debe contener los equipos empatados.");
+          throw new Error(
+            "qualificationResolution.affectedTeamIds debe contener los equipos empatados.",
+          );
         }
         const qualifiedTeamId = requiredString(
           payload.qualifiedTeamId ?? payload.qualified_team_id,
           "qualificationResolution.qualifiedTeamId",
         );
         if (!affectedTeamIds.includes(qualifiedTeamId)) {
-          throw new Error("El equipo clasificado debe estar entre los equipos afectados.");
+          throw new Error(
+            "El equipo clasificado debe estar entre los equipos afectados.",
+          );
         }
         await this.ensureTournamentExists(tournamentId);
-        await this.upsert("qualification_resolutions", {
-          id: requiredString(payload.id ?? item.entityId, "qualificationResolution.id"),
-          tournament_id: tournamentId,
-          group_id: groupId,
-          affected_team_ids: affectedTeamIds,
-          qualified_team_id: qualifiedTeamId,
-          criterion: requiredString(payload.criterion, "qualificationResolution.criterion"),
-          decided_by: requiredString(payload.decidedBy ?? payload.decided_by, "qualificationResolution.decidedBy"),
-          decided_at: requiredString(payload.decidedAt ?? payload.decided_at, "qualificationResolution.decidedAt"),
-          updated_at: payload.updatedAt ?? item.updatedAt,
-        }, "tournament_id,group_id");
+        await this.upsert(
+          "qualification_resolutions",
+          {
+            id: requiredString(
+              payload.id ?? item.entityId,
+              "qualificationResolution.id",
+            ),
+            tournament_id: tournamentId,
+            group_id: groupId,
+            affected_team_ids: affectedTeamIds,
+            qualified_team_id: qualifiedTeamId,
+            criterion: requiredString(
+              payload.criterion,
+              "qualificationResolution.criterion",
+            ),
+            decided_by: requiredString(
+              payload.decidedBy ?? payload.decided_by,
+              "qualificationResolution.decidedBy",
+            ),
+            decided_at: requiredString(
+              payload.decidedAt ?? payload.decided_at,
+              "qualificationResolution.decidedAt",
+            ),
+            updated_at: payload.updatedAt ?? item.updatedAt,
+          },
+          "tournament_id,group_id",
+        );
         return { success: true };
       }
 
@@ -630,71 +747,136 @@ if (item.entityType === "team" || item.operation === "save_team") {
       // Corrección administrativa: debe procesarse antes de la rama genérica
       // de partidos porque usa entityType = "match".
       if (item.operation === "save_lineup") {
-        const matchId = requiredString(payload.matchId ?? item.entityId, "matchId");
+        const matchId = requiredString(
+          payload.matchId ?? item.entityId,
+          "matchId",
+        );
         const setNumber = requiredNumber(payload.setNumber, "setNumber");
         const team = requiredString(payload.team, "team");
-        if (team !== "home" && team !== "away") throw new Error("team debe ser 'home' o 'away'.");
-        await this.ensureMatchExists(matchId);
+        if (team !== "home" && team !== "away")
+          throw new Error("team debe ser 'home' o 'away'.");
+        const remoteMatchExists = await this.remoteRowExists(
+          "matches",
+          matchId,
+        );
+
+        if (!remoteMatchExists) {
+          await this.ensureMatchExists(matchId);
+        }
         const lineup = payload.lineup;
-        if (!Array.isArray(lineup) || lineup.length !== 6) throw new Error("La alineación remota debe tener seis jugadores.");
-        const { error: clearLineupError } = await supabase.from("match_lineups")
-          .delete().eq("match_id", matchId).eq("set_number", setNumber).eq("team", team);
+        if (!Array.isArray(lineup) || lineup.length !== 6)
+          throw new Error("La alineación remota debe tener seis jugadores.");
+        const { error: clearLineupError } = await supabase
+          .from("match_lineups")
+          .delete()
+          .eq("match_id", matchId)
+          .eq("set_number", setNumber)
+          .eq("team", team);
         throwIfError(clearLineupError);
         for (const entry of lineup) {
           const row = asRecord(entry);
-          await this.upsert("match_lineups", {
+          await this.upsert(
+            "match_lineups",
+            {
+              match_id: matchId,
+              set_number: setNumber,
+              team,
+              position: requiredNumber(row.position, "lineup.position"),
+              player_id: requiredString(row.playerId, "lineup.playerId"),
+              initial_position: requiredNumber(row.position, "lineup.position"),
+              current_position: requiredNumber(row.position, "lineup.position"),
+              updated_at: payload.updatedAt ?? item.updatedAt,
+            },
+            "match_id,set_number,team,position",
+          );
+        }
+        await this.upsert(
+          "set_alignment_state",
+          {
             match_id: matchId,
             set_number: setNumber,
             team,
-            position: requiredNumber(row.position, "lineup.position"),
-            player_id: requiredString(row.playerId, "lineup.playerId"),
-            initial_position: requiredNumber(row.position, "lineup.position"),
-            current_position: requiredNumber(row.position, "lineup.position"),
+            server_player_id: requiredString(
+              payload.serverPlayerId,
+              "serverPlayerId",
+            ),
+            server_position: requiredNumber(
+              payload.serverPosition,
+              "serverPosition",
+            ),
+            is_serving: payload.isServing ? 1 : 0,
+            rotation_number: 0,
             updated_at: payload.updatedAt ?? item.updatedAt,
-          }, "match_id,set_number,team,position");
-        }
-        await this.upsert("set_alignment_state", {
-          match_id: matchId,
-          set_number: setNumber,
-          team,
-          server_player_id: requiredString(payload.serverPlayerId, "serverPlayerId"),
-          server_position: requiredNumber(payload.serverPosition, "serverPosition"),
-          is_serving: payload.isServing ? 1 : 0,
-          rotation_number: 0,
-          updated_at: payload.updatedAt ?? item.updatedAt,
-        }, "match_id,set_number,team");
+          },
+          "match_id,set_number,team",
+        );
         return { success: true };
       }
 
       if (item.operation === "save_alignment_state") {
-        const matchId = requiredString(payload.matchId ?? item.entityId, "matchId");
+        const matchId = requiredString(
+          payload.matchId ?? item.entityId,
+          "matchId",
+        );
         const setNumber = requiredNumber(payload.setNumber, "setNumber");
         const team = requiredString(payload.team, "team");
         await this.ensureMatchExists(matchId);
         const lineup = payload.lineup;
-        if (!Array.isArray(lineup) || lineup.length !== 6) throw new Error("La alineación remota está incompleta.");
-        const { error: clearAlignmentError } = await supabase.from("match_lineups")
-          .delete().eq("match_id", matchId).eq("set_number", setNumber).eq("team", team);
+        if (!Array.isArray(lineup) || lineup.length !== 6)
+          throw new Error("La alineación remota está incompleta.");
+        const { error: clearAlignmentError } = await supabase
+          .from("match_lineups")
+          .delete()
+          .eq("match_id", matchId)
+          .eq("set_number", setNumber)
+          .eq("team", team);
         throwIfError(clearAlignmentError);
         for (const entry of lineup) {
           const row = asRecord(entry);
-          await this.upsert("match_lineups", {
-            match_id: matchId, set_number: setNumber, team,
-            position: requiredNumber(row.position, "alignment.position"),
-            player_id: requiredString(row.playerId, "alignment.playerId"),
-            initial_position: requiredNumber(row.initialPosition, "alignment.initialPosition"),
-            current_position: requiredNumber(row.position, "alignment.position"),
-            updated_at: payload.updatedAt ?? item.updatedAt,
-          }, "match_id,set_number,team,position");
+          await this.upsert(
+            "match_lineups",
+            {
+              match_id: matchId,
+              set_number: setNumber,
+              team,
+              position: requiredNumber(row.position, "alignment.position"),
+              player_id: requiredString(row.playerId, "alignment.playerId"),
+              initial_position: requiredNumber(
+                row.initialPosition,
+                "alignment.initialPosition",
+              ),
+              current_position: requiredNumber(
+                row.position,
+                "alignment.position",
+              ),
+              updated_at: payload.updatedAt ?? item.updatedAt,
+            },
+            "match_id,set_number,team,position",
+          );
         }
-        await this.upsert("set_alignment_state", {
-          match_id: matchId, set_number: setNumber, team,
-          server_player_id: requiredString(payload.serverPlayerId, "serverPlayerId"),
-          server_position: requiredNumber(payload.serverPosition, "serverPosition"),
-          is_serving: payload.isServing ? 1 : 0,
-          rotation_number: requiredNumber(payload.rotationNumber, "rotationNumber"),
-          updated_at: payload.updatedAt ?? item.updatedAt,
-        }, "match_id,set_number,team");
+        await this.upsert(
+          "set_alignment_state",
+          {
+            match_id: matchId,
+            set_number: setNumber,
+            team,
+            server_player_id: requiredString(
+              payload.serverPlayerId,
+              "serverPlayerId",
+            ),
+            server_position: requiredNumber(
+              payload.serverPosition,
+              "serverPosition",
+            ),
+            is_serving: payload.isServing ? 1 : 0,
+            rotation_number: requiredNumber(
+              payload.rotationNumber,
+              "rotationNumber",
+            ),
+            updated_at: payload.updatedAt ?? item.updatedAt,
+          },
+          "match_id,set_number,team",
+        );
         return { success: true };
       }
 
@@ -704,33 +886,61 @@ if (item.entityType === "team" || item.operation === "save_team") {
         const team = requiredString(payload.team, "team");
         await this.ensureMatchExists(matchId);
         const toPositions = payload.toPositions;
-        if (!Array.isArray(toPositions) || toPositions.length !== 6) throw new Error("La rotación remota está incompleta.");
-        const { error: clearRotationError } = await supabase.from("match_lineups")
-          .delete().eq("match_id", matchId).eq("set_number", setNumber).eq("team", team);
+        if (!Array.isArray(toPositions) || toPositions.length !== 6)
+          throw new Error("La rotación remota está incompleta.");
+        const { error: clearRotationError } = await supabase
+          .from("match_lineups")
+          .delete()
+          .eq("match_id", matchId)
+          .eq("set_number", setNumber)
+          .eq("team", team);
         throwIfError(clearRotationError);
         for (const entry of toPositions) {
           const row = asRecord(entry);
-          await this.upsert("match_lineups", {
+          await this.upsert(
+            "match_lineups",
+            {
+              match_id: matchId,
+              set_number: setNumber,
+              team,
+              position: requiredNumber(row.position, "rotation.position"),
+              player_id: requiredString(row.playerId, "rotation.playerId"),
+              initial_position: requiredNumber(
+                row.initialPosition ?? row.position,
+                "rotation.initialPosition",
+              ),
+              current_position: requiredNumber(
+                row.position,
+                "rotation.position",
+              ),
+              updated_at: payload.createdAt ?? item.createdAt,
+            },
+            "match_id,set_number,team,position",
+          );
+        }
+        await this.upsert(
+          "set_alignment_state",
+          {
             match_id: matchId,
             set_number: setNumber,
             team,
-            position: requiredNumber(row.position, "rotation.position"),
-            player_id: requiredString(row.playerId, "rotation.playerId"),
-            initial_position: requiredNumber(row.initialPosition ?? row.position, "rotation.initialPosition"),
-            current_position: requiredNumber(row.position, "rotation.position"),
+            server_player_id: requiredString(
+              payload.serverPlayerId,
+              "serverPlayerId",
+            ),
+            server_position: requiredNumber(
+              payload.serverPosition,
+              "serverPosition",
+            ),
+            is_serving: 1,
+            rotation_number: requiredNumber(
+              payload.rotationNumber,
+              "rotationNumber",
+            ),
             updated_at: payload.createdAt ?? item.createdAt,
-          }, "match_id,set_number,team,position");
-        }
-        await this.upsert("set_alignment_state", {
-          match_id: matchId,
-          set_number: setNumber,
-          team,
-          server_player_id: requiredString(payload.serverPlayerId, "serverPlayerId"),
-          server_position: requiredNumber(payload.serverPosition, "serverPosition"),
-          is_serving: 1,
-          rotation_number: requiredNumber(payload.rotationNumber, "rotationNumber"),
-          updated_at: payload.createdAt ?? item.createdAt,
-        }, "match_id,set_number,team");
+          },
+          "match_id,set_number,team",
+        );
         await this.upsert("rotation_events", {
           id: requiredString(payload.id ?? item.entityId, "rotation.id"),
           match_id: matchId,
@@ -741,7 +951,12 @@ if (item.entityType === "team" || item.operation === "save_team") {
           to_positions_json: toPositions,
           created_at: payload.createdAt ?? item.createdAt,
         });
-        await supabase.from("set_alignment_state").update({ is_serving: 0 }).eq("match_id", matchId).eq("set_number", setNumber).neq("team", team);
+        await supabase
+          .from("set_alignment_state")
+          .update({ is_serving: 0 })
+          .eq("match_id", matchId)
+          .eq("set_number", setNumber)
+          .neq("team", team);
         return { success: true };
       }
 
@@ -768,22 +983,47 @@ if (item.entityType === "team" || item.operation === "save_team") {
       }
 
       if (item.operation === "save_substitution") {
-        const matchId = requiredString(payload.matchId ?? item.entityId, "matchId");
+        const matchId = requiredString(
+          payload.matchId ?? item.entityId,
+          "matchId",
+        );
         await this.ensureMatchExists(matchId);
         const team = requiredString(payload.team, "substitution.team");
-        if (team !== "home" && team !== "away") throw new Error("team debe ser 'home' o 'away'.");
+        if (team !== "home" && team !== "away")
+          throw new Error("team debe ser 'home' o 'away'.");
         await this.upsert("substitution_events", {
           id: requiredString(payload.id ?? item.entityId, "substitution.id"),
           match_id: matchId,
-          set_number: requiredNumber(payload.setNumber, "substitution.setNumber"),
+          set_number: requiredNumber(
+            payload.setNumber,
+            "substitution.setNumber",
+          ),
           team,
-          player_out_id: requiredString(payload.playerOutId, "substitution.playerOutId"),
-          player_in_id: requiredString(payload.playerInId, "substitution.playerInId"),
+          player_out_id: requiredString(
+            payload.playerOutId,
+            "substitution.playerOutId",
+          ),
+          player_in_id: requiredString(
+            payload.playerInId,
+            "substitution.playerInId",
+          ),
           position: requiredNumber(payload.position, "substitution.position"),
-          rotation_number: requiredNumber(payload.rotationNumber, "substitution.rotationNumber"),
-          score_home: requiredNumber(payload.scoreHome, "substitution.scoreHome"),
-          score_away: requiredNumber(payload.scoreAway, "substitution.scoreAway"),
-          occurred_at: requiredString(payload.occurredAt, "substitution.occurredAt"),
+          rotation_number: requiredNumber(
+            payload.rotationNumber,
+            "substitution.rotationNumber",
+          ),
+          score_home: requiredNumber(
+            payload.scoreHome,
+            "substitution.scoreHome",
+          ),
+          score_away: requiredNumber(
+            payload.scoreAway,
+            "substitution.scoreAway",
+          ),
+          occurred_at: requiredString(
+            payload.occurredAt,
+            "substitution.occurredAt",
+          ),
           corrects_event_id: payload.correctsEventId ?? null,
           created_at: payload.createdAt ?? item.createdAt,
         });
@@ -834,7 +1074,14 @@ if (item.entityType === "team" || item.operation === "save_team") {
           payload.matchId ?? payload.match_id ?? item.entityId,
           "matchId",
         );
-        await this.ensureMatchExists(matchId);
+        const remoteMatchExists = await this.remoteRowExists(
+          "matches",
+          matchId,
+        );
+
+        if (!remoteMatchExists) {
+          await this.ensureMatchExists(matchId);
+        }
         const { data: match, error: matchError } = await supabase
           .from("matches")
           .select("phase")
@@ -854,7 +1101,9 @@ if (item.entityType === "team" || item.operation === "save_team") {
           Number(payload.setNumber ?? payload.set_number) <= 2 &&
           Math.max(homePoints, awayPoints) > 15
         ) {
-          throw new Error("Los sets 1 y 2 de grupos no pueden superar 15 puntos.");
+          throw new Error(
+            "Los sets 1 y 2 de grupos no pueden superar 15 puntos.",
+          );
         }
 
         await this.upsert(

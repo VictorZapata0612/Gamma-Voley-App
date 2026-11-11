@@ -52,6 +52,7 @@ export default function GroupsScreen() {
   const db = useSQLiteContext();
   const [teams, setTeams] = useState<GroupTeamRecord[]>([]);
   const [message, setMessage] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -101,6 +102,8 @@ export default function GroupsScreen() {
   }
 
   async function generate() {
+    if (isGenerating) return;
+    setIsGenerating(true);
     try {
       const domainTeams = teams.map((team) => ({
         id: team.id,
@@ -115,6 +118,8 @@ export default function GroupsScreen() {
       router.push("/calendar");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "No se pudo generar el calendario.");
+    } finally {
+      setIsGenerating(false);
     }
   }
 
@@ -247,14 +252,16 @@ export default function GroupsScreen() {
 
         {/* Botón de Generación Oficial */}
         <Pressable
-          disabled={!validation.valid}
+        disabled={!validation.valid || isGenerating}
           onPress={() => void generate()}
-          style={[styles.generateButton, !validation.valid && styles.disabledButton]}
+        style={[styles.generateButton, (!validation.valid || isGenerating) && styles.disabledButton]}
         >
           <Text style={styles.generateButtonText}>
-            {validation.valid
-              ? "⚡ Generar Calendario Oficial (20 Partidos)"
-              : `Completa ${GROUP_SIZE} equipos por grupo para programar`}
+          {isGenerating
+            ? "Generando calendario oficial..."
+            : validation.valid
+            ? "⚡ Generar Calendario Oficial (20 Partidos)"
+            : `Completa ${GROUP_SIZE} equipos por grupo para programar`}
           </Text>
         </Pressable>
       </ScrollView>

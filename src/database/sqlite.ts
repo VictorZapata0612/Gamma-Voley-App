@@ -3,8 +3,66 @@ import type { SQLiteDatabase } from "expo-sqlite";
 const SCHEMA_VERSION = 9;
 export const DEFAULT_TOURNAMENT_ID = "gamma-voley-2026";
 
-async function hasColumn(db: SQLiteDatabase, table: string, column: string): Promise<boolean> {
-  const rows = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
+const transactionQueues = new WeakMap<SQLiteDatabase, Promise<void>>();
+
+export class SQLiteRollbackError extends Error {
+  constructor(
+    public readonly operationError: unknown,
+    public readonly rollbackError: unknown,
+  ) {
+    super("La operación SQLite falló y también falló su reversión.");
+    this.name = "SQLiteRollbackError";
+  }
+}
+
+export async function withDatabaseTransaction<T>(
+  db: SQLiteDatabase,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = transactionQueues.get(db) ?? Promise.resolve();
+
+  let release!: () => void;
+  const lock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.then(() => lock);
+
+  transactionQueues.set(db, queued);
+  await previous;
+
+  try {
+    await db.execAsync("BEGIN TRANSACTION;");
+
+    try {
+      const result = await operation();
+      await db.execAsync("COMMIT;");
+      return result;
+    } catch (operationError) {
+      try {
+        await db.execAsync("ROLLBACK;");
+      } catch (rollbackError) {
+        throw new SQLiteRollbackError(operationError, rollbackError);
+      }
+
+      throw operationError;
+    }
+  } finally {
+    release();
+
+    if (transactionQueues.get(db) === queued) {
+      transactionQueues.delete(db);
+    }
+  }
+}
+
+async function hasColumn(
+  db: SQLiteDatabase,
+  table: string,
+  column: string,
+): Promise<boolean> {
+  const rows = await db.getAllAsync<{ name: string }>(
+    `PRAGMA table_info(${table})`,
+  );
   return rows.some((row) => row.name === column);
 }
 
@@ -287,7 +345,9 @@ const INITIAL_SCHEMA = `
 
 export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
   await db.execAsync("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-  const versionRow = await db.getFirstAsync<{ user_version: number }>("PRAGMA user_version");
+  const versionRow = await db.getFirstAsync<{ user_version: number }>(
+    "PRAGMA user_version",
+  );
   const currentVersion = versionRow?.user_version ?? 0;
   if (currentVersion > SCHEMA_VERSION) {
     // Future schema versions may add tables or indexes without breaking this app.
@@ -298,8 +358,7 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
   }
   if (currentVersion === SCHEMA_VERSION) return;
 
-  await db.execAsync("BEGIN TRANSACTION;");
-  try {
+  await withDatabaseTransaction(db, async () => {
     if (currentVersion < 1) {
       await db.execAsync(INITIAL_SCHEMA);
     }
@@ -317,7 +376,7 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
         10,
         2,
         now,
-        now
+        now,
       );
     }
     if (currentVersion < 3) {
@@ -331,7 +390,7 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
     if (currentVersion < 4) {
       await db.runAsync(
         "UPDATE tournaments SET max_teams = 10 WHERE id = ?",
-        DEFAULT_TOURNAMENT_ID
+        DEFAULT_TOURNAMENT_ID,
       );
     }
     if (currentVersion < 5) {
@@ -403,43 +462,78 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
         BEGIN SELECT RAISE(ABORT, 'TOURNAMENT_TEAM_LIMIT'); END;
       `);
     }
-    if (currentVersion < 7 && currentVersion >= 6) {
-      await db.execAsync(`
-        ALTER TABLE rotation_faults ADD COLUMN awarded_to TEXT;
-        ALTER TABLE rotation_faults ADD COLUMN sanction_applied INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE rotation_faults ADD COLUMN occurred_at TEXT;
-        ALTER TABLE rotation_faults ADD COLUMN points_to_annul_json TEXT;
-        ALTER TABLE rotation_faults ADD COLUMN correction_of_id TEXT;
-        CREATE TABLE IF NOT EXISTS substitution_events (
-          id TEXT PRIMARY KEY NOT NULL,
-          match_id TEXT NOT NULL REFERENCES matches(id),
-          set_number INTEGER NOT NULL CHECK (set_number > 0),
-          team TEXT NOT NULL CHECK (team IN ('home', 'away')),
-          player_out_id TEXT NOT NULL REFERENCES players(id),
-          player_in_id TEXT NOT NULL REFERENCES players(id),
-          position INTEGER NOT NULL CHECK (position BETWEEN 1 AND 6),
-          rotation_number INTEGER NOT NULL CHECK (rotation_number >= 0),
-          score_home INTEGER NOT NULL CHECK (score_home >= 0),
-          score_away INTEGER NOT NULL CHECK (score_away >= 0),
-          occurred_at TEXT NOT NULL,
-          corrects_event_id TEXT,
-          created_at TEXT NOT NULL
+    if (currentVersion < 7) {
+      if (!(await hasColumn(db, "rotation_faults", "awarded_to"))) {
+        await db.execAsync(
+          "ALTER TABLE rotation_faults ADD COLUMN awarded_to TEXT CHECK (awarded_to IS NULL OR awarded_to IN ('home', 'away'));",
         );
-        CREATE INDEX IF NOT EXISTS idx_substitution_events_match ON substitution_events(match_id, set_number, created_at);
-      `);
+      }
+
+      if (!(await hasColumn(db, "rotation_faults", "sanction_applied"))) {
+        await db.execAsync(
+          "ALTER TABLE rotation_faults ADD COLUMN sanction_applied INTEGER NOT NULL DEFAULT 0 CHECK (sanction_applied IN (0, 1));",
+        );
+      }
+
+      if (!(await hasColumn(db, "rotation_faults", "occurred_at"))) {
+        await db.execAsync(
+          "ALTER TABLE rotation_faults ADD COLUMN occurred_at TEXT;",
+        );
+      }
+
+      if (!(await hasColumn(db, "rotation_faults", "points_to_annul_json"))) {
+        await db.execAsync(
+          "ALTER TABLE rotation_faults ADD COLUMN points_to_annul_json TEXT;",
+        );
+      }
+
+      if (!(await hasColumn(db, "rotation_faults", "correction_of_id"))) {
+        await db.execAsync(
+          "ALTER TABLE rotation_faults ADD COLUMN correction_of_id TEXT;",
+        );
+      }
+
+      await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS substitution_events (
+      id TEXT PRIMARY KEY NOT NULL,
+      match_id TEXT NOT NULL REFERENCES matches(id),
+      set_number INTEGER NOT NULL CHECK (set_number > 0),
+      team TEXT NOT NULL CHECK (team IN ('home', 'away')),
+      player_out_id TEXT NOT NULL REFERENCES players(id),
+      player_in_id TEXT NOT NULL REFERENCES players(id),
+      position INTEGER NOT NULL CHECK (position BETWEEN 1 AND 6),
+      rotation_number INTEGER NOT NULL CHECK (rotation_number >= 0),
+      score_home INTEGER NOT NULL CHECK (score_home >= 0),
+      score_away INTEGER NOT NULL CHECK (score_away >= 0),
+      occurred_at TEXT NOT NULL,
+      corrects_event_id TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_substitution_events_match
+      ON substitution_events(match_id, set_number, created_at);
+  `);
     }
     if (currentVersion < 8) {
       if (!(await hasColumn(db, "teams", "initial_payment_status"))) {
-        await db.execAsync("ALTER TABLE teams ADD COLUMN initial_payment_status TEXT NOT NULL DEFAULT 'pending';");
+        await db.execAsync(
+          "ALTER TABLE teams ADD COLUMN initial_payment_status TEXT NOT NULL DEFAULT 'pending';",
+        );
       }
       if (!(await hasColumn(db, "teams", "balance_payment_status"))) {
-        await db.execAsync("ALTER TABLE teams ADD COLUMN balance_payment_status TEXT NOT NULL DEFAULT 'pending';");
+        await db.execAsync(
+          "ALTER TABLE teams ADD COLUMN balance_payment_status TEXT NOT NULL DEFAULT 'pending';",
+        );
       }
       if (!(await hasColumn(db, "teams", "initial_payment_paid_at"))) {
-        await db.execAsync("ALTER TABLE teams ADD COLUMN initial_payment_paid_at TEXT;");
+        await db.execAsync(
+          "ALTER TABLE teams ADD COLUMN initial_payment_paid_at TEXT;",
+        );
       }
       if (!(await hasColumn(db, "teams", "balance_payment_paid_at"))) {
-        await db.execAsync("ALTER TABLE teams ADD COLUMN balance_payment_paid_at TEXT;");
+        await db.execAsync(
+          "ALTER TABLE teams ADD COLUMN balance_payment_paid_at TEXT;",
+        );
       }
       await db.execAsync(`
         UPDATE teams
@@ -480,9 +574,5 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
       `);
     }
     await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
-    await db.execAsync("COMMIT;");
-  } catch (error) {
-    await db.execAsync("ROLLBACK;");
-    throw error;
-  }
+  });
 }

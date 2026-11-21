@@ -1,28 +1,26 @@
 {
   "expo": {
-    "name": "gamma-voley",
+    "name": "Gamma Voley",
     "slug": "gamma-voley",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/gamma-app-icon.png",
     "scheme": "gammavoley",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/images/gamma-app-icon.png"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#0B0B0D",
+        "foregroundImage": "./assets/images/gamma-adaptive.png"
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.victorzapata0612.gammavoley"
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/gamma-favicon.png"
     },
     "plugins": [
       [
@@ -37,9 +35,9 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "backgroundColor": "#0B0B0D",
+          "image": "./assets/images/gamma-crest.png",
+          "imageWidth": 130
         }
       ],
       "expo-sqlite",

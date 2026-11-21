@@ -35,7 +35,7 @@ import { isSetClosed, toDisplaySetScore } from "@/domain/rules";
 import { useMatchRealtime } from "@/hooks/useMatchRealtime";
 import type { MatchRealtimeStatus } from "@/services/realtime";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
-import { colors, spacing, touchTarget } from "@/ui/theme";
+import { colors, screenContent, ui, touchTarget } from "@/ui/theme";
 import { generateMatchActHtml, loadMatchActData } from "@/services/matchAct";
 
 /**
@@ -458,17 +458,7 @@ console.log("[GAMMA_SERVE_TRACE] leído después de guardar", {
   })),
 });
 
-    await saveMatchLineups(
-      db,
-      match.id,
-      setNumber,
-      {
-        home: makeLineup("home"),
-        away: makeLineup("away"),
-      },
-      serverPositions,
-      initialServingTeam,
-    );
+
 
     setShowServeModal(false);
     setError(null);
@@ -476,6 +466,10 @@ console.log("[GAMMA_SERVE_TRACE] leído después de guardar", {
     void triggerImmediateSync(db);
     await load();
   } catch (err) {
+    console.error('[GAMMA_SERVE_TRACE] error al guardar alineaciones', {
+      matchId: match.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
     setError(
       err instanceof Error
         ? err.message
@@ -651,7 +645,7 @@ console.log("[GAMMA_SERVE_TRACE] leído después de guardar", {
         }}
       >
         <View style={styles.serveModalBackdrop}>
-          <View style={styles.serveModalCard}>
+          <ScrollView style={styles.serveModalCard} keyboardShouldPersistTaps="handled" accessibilityViewIsModal>
             <Text style={styles.serveModalEyebrow}>
               {currentSetLabel.toUpperCase()}
             </Text>
@@ -672,6 +666,8 @@ console.log("[GAMMA_SERVE_TRACE] leído después de guardar", {
               return (
                 <Pressable
                   key={team}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
                   onPress={() => setInitialServingTeam(team)}
                   style={[
                     styles.serveTeamOption,
@@ -718,7 +714,7 @@ console.log("[GAMMA_SERVE_TRACE] leído después de guardar", {
                 Volver a las alineaciones
               </Text>
             </Pressable>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
       <ScrollView contentContainerStyle={styles.container}>
@@ -1188,14 +1184,14 @@ console.log("[GAMMA_SERVE_TRACE] leído después de guardar", {
                   <TextInput
                     style={styles.reasonInput}
                     placeholder="Servidor incorrecto (ID o camiseta)"
-                    placeholderTextColor="#70737C"
+                    placeholderTextColor={colors.textSubtle}
                     value={faultServer}
                     onChangeText={setFaultServer}
                   />
                   <TextInput
                     style={styles.reasonInput}
                     placeholder="Posición incorrecta (1-6)"
-                    placeholderTextColor="#70737C"
+                    placeholderTextColor={colors.textSubtle}
                     keyboardType="number-pad"
                     value={faultPosition}
                     onChangeText={setFaultPosition}
@@ -1203,14 +1199,14 @@ console.log("[GAMMA_SERVE_TRACE] leído después de guardar", {
                   <TextInput
                     style={styles.reasonInput}
                     placeholder="Sanción aplicada"
-                    placeholderTextColor="#70737C"
+                    placeholderTextColor={colors.textSubtle}
                     value={faultSanction}
                     onChangeText={setFaultSanction}
                   />
                   <TextInput
                     style={styles.reasonInput}
                     placeholder="Motivo / observación"
-                    placeholderTextColor="#70737C"
+                    placeholderTextColor={colors.textSubtle}
                     value={faultReason}
                     onChangeText={setFaultReason}
                   />
@@ -1423,7 +1419,7 @@ console.log("[GAMMA_SERVE_TRACE] leído después de guardar", {
                 <TextInput
                   style={styles.reasonInput}
                   placeholder="Árbitro que decide"
-                  placeholderTextColor="#70737C"
+                  placeholderTextColor={colors.textSubtle}
                   value={refereeName}
                   onChangeText={setRefereeName}
                 />
@@ -1432,7 +1428,7 @@ console.log("[GAMMA_SERVE_TRACE] leído después de guardar", {
                     style={styles.countInput}
                     keyboardType="number-pad"
                     placeholder="Presentes local"
-                    placeholderTextColor="#70737C"
+                    placeholderTextColor={colors.textSubtle}
                     value={homePresentCount}
                     onChangeText={setHomePresentCount}
                   />
@@ -1440,7 +1436,7 @@ console.log("[GAMMA_SERVE_TRACE] leído después de guardar", {
                     style={styles.countInput}
                     keyboardType="number-pad"
                     placeholder="Presentes visitante"
-                    placeholderTextColor="#70737C"
+                    placeholderTextColor={colors.textSubtle}
                     value={awayPresentCount}
                     onChangeText={setAwayPresentCount}
                   />
@@ -1448,7 +1444,7 @@ console.log("[GAMMA_SERVE_TRACE] leído después de guardar", {
                 <TextInput
                   style={styles.reasonInput}
                   placeholder="Condición de jugadores presentes y observación arbitral"
-                  placeholderTextColor="#70737C"
+                  placeholderTextColor={colors.textSubtle}
                   value={playerConditionNote}
                   onChangeText={setPlayerConditionNote}
                   multiline
@@ -1533,7 +1529,7 @@ console.log("[GAMMA_SERVE_TRACE] leído después de guardar", {
             <TextInput
               style={styles.reasonInput}
               placeholder="Ej: Marcación incorrecta de punto o error de mesa"
-              placeholderTextColor="#70737C"
+              placeholderTextColor={colors.textSubtle}
               value={reason}
               onChangeText={setReason}
             />
@@ -1601,17 +1597,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     padding: 20,
-    backgroundColor: "rgba(0, 0, 0, 0.76)",
+    backgroundColor: colors.overlay,
   },
-  serveModalCard: {
-    width: "100%",
-    maxWidth: 440,
-    padding: 18,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#3A3C45",
-    backgroundColor: colors.surface,
-  },
+  serveModalCard: { ...ui.dialog   },
   serveModalEyebrow: {
     color: colors.primary,
     fontSize: 10,
@@ -1631,16 +1619,16 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   serveTeamOption: {
+    ...ui.button,
     padding: 13,
     marginTop: 8,
-    borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#343640",
+    borderColor: colors.borderStrong,
     backgroundColor: colors.surfaceRaised,
   },
   serveTeamOptionActive: {
     borderColor: colors.primary,
-    backgroundColor: "#301A1C",
+    backgroundColor: colors.primarySoft,
   },
   serveTeamName: { color: colors.text, fontSize: 15, fontWeight: "900" },
   serveTeamServer: { color: colors.textMuted, fontSize: 11, marginTop: 4 },
@@ -1651,18 +1639,13 @@ const styles = StyleSheet.create({
     marginTop: 7,
   },
   serveConfirmDisabled: { opacity: 0.55 },
-  serveModalCancel: { alignItems: "center", padding: 12, marginTop: 4 },
+  serveModalCancel: { ...ui.button, padding: 12, marginTop: 4, },
   serveModalCancelText: {
     color: colors.textMuted,
     fontSize: 12,
     fontWeight: "700",
   },
-  container: {
-    flexGrow: 1,
-    padding: spacing.screen,
-    paddingTop: spacing.screenTop,
-    paddingBottom: spacing.screenBottom,
-  },
+  container: { ...screenContent   },
   center: {
     flex: 1,
     justifyContent: "center",
@@ -1670,12 +1653,12 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   title: {
-    color: "#FFF",
+    color: colors.text,
     fontSize: 16,
     fontWeight: "800",
     textAlign: "center",
   },
-  back: { color: "#E53935", fontSize: 14, fontWeight: "700", marginBottom: 14 },
+  back: { color: colors.primary, fontSize: 14, fontWeight: "700", marginBottom: 14 },
 
   headerRow: {
     flexDirection: "row",
@@ -1690,29 +1673,28 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   actButton: {
-    backgroundColor: colors.primary,
-    borderRadius: 8,
+    ...ui.button, backgroundColor: colors.primaryPressed,
     paddingHorizontal: 14,
     paddingVertical: 11,
   },
-  actButtonText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800" },
+  actButtonText: { color: colors.text, fontSize: 12, fontWeight: "800" },
   actButtonSecondary: {
-    backgroundColor: "#2B2D35",
-    borderRadius: 8,
+    ...ui.button,
+    backgroundColor: colors.border,
     paddingHorizontal: 14,
     paddingVertical: 11,
   },
-  actButtonSecondaryText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800" },
+  actButtonSecondaryText: { color: colors.text, fontSize: 12, fontWeight: "800" },
   actButtonDisabled: { opacity: 0.55 },
   eyebrow: {
-    color: "#E53935",
+    color: colors.primary,
     fontSize: 10,
     fontWeight: "900",
     letterSpacing: 1.2,
   },
-  matchTitle: { color: "#FFF", fontSize: 18, fontWeight: "900", marginTop: 2 },
+  matchTitle: { color: colors.text, fontSize: 18, fontWeight: "900", marginTop: 2 },
   statusBadge: {
-    backgroundColor: "#2B2D35",
+    backgroundColor: colors.border,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
@@ -1750,7 +1732,7 @@ const styles = StyleSheet.create({
   },
   closeTimerBtnText: { color: "#FFCC80", fontSize: 11, fontWeight: "800" },
   timeoutTimerTeamTitle: {
-    color: "#FFFFFF",
+    color: colors.text,
     fontSize: 20,
     fontWeight: "900",
     marginTop: 8,
@@ -1784,20 +1766,17 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 8,
   },
-  timerFinishedText: { color: "#FFFFFF", fontSize: 12, fontWeight: "900" },
+  timerFinishedText: { color: colors.text, fontSize: 12, fontWeight: "900" },
   timerRunningText: { color: "#FFCC80", fontSize: 11 },
 
   scoreboard: {
-    backgroundColor: "#17181D",
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
+    ...ui.card, borderTopWidth: 3, borderTopColor: colors.primary,
     padding: 16,
     marginBottom: 16,
   },
   setBanner: { alignItems: "center", marginBottom: 14 },
   setText: {
-    color: "#E53935",
+    color: colors.primary,
     fontSize: 12,
     fontWeight: "900",
     letterSpacing: 1,
@@ -1816,14 +1795,14 @@ const styles = StyleSheet.create({
   },
   teamCol: { flex: 1, alignItems: "center" },
   teamName: {
-    color: "#FFF",
+    color: colors.text,
     fontSize: 15,
     fontWeight: "800",
     textAlign: "center",
   },
   scoreNumber: {
-    color: "#FFF",
-    fontSize: 56,
+    color: colors.text,
+    fontSize: 62,
     fontWeight: "900",
     marginVertical: 4,
     fontVariant: ["tabular-nums"],
@@ -1837,22 +1816,22 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: "center",
   },
-  scoreBtnPlus: { backgroundColor: colors.primary },
+  scoreBtnPlus: { backgroundColor: colors.primaryPressed },
   scoreBtnMinus: { backgroundColor: colors.border },
-  scoreBtnText: { color: "#FFF", fontSize: 18, fontWeight: "900" },
-  scoreBtnMinusText: { color: "#A6A8AE", fontSize: 14, fontWeight: "800" },
+  scoreBtnText: { color: colors.text, fontSize: 18, fontWeight: "900" },
+  scoreBtnMinusText: { color: colors.textMuted, fontSize: 14, fontWeight: "800" },
 
   vsText: {
-    color: "#70737C",
+    color: colors.textSubtle,
     fontSize: 14,
     fontWeight: "900",
     width: 28,
     textAlign: "center",
   },
 
-  setsSummaryBox: { marginBottom: 16 },
+  setsSummaryBox: { ...ui.card, marginBottom: 16, },
   sectionTitle: {
-    color: "#FFF",
+    color: colors.text,
     fontSize: 14,
     fontWeight: "800",
     marginBottom: 8,
@@ -1860,46 +1839,43 @@ const styles = StyleSheet.create({
   setsGrid: { flexDirection: "row", gap: 8 },
   setCard: {
     flex: 1,
-    backgroundColor: "#17181D",
+    backgroundColor: colors.surface,
     borderRadius: 10,
     padding: 10,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#2B2D35",
+    borderColor: colors.border,
   },
-  setCardActive: { borderColor: "#E53935", backgroundColor: "#1E181A" },
-  setCardNum: { color: "#70737C", fontSize: 10, fontWeight: "800" },
+  setCardActive: { borderColor: colors.primary, backgroundColor: "#1E181A" },
+  setCardNum: { color: colors.textSubtle, fontSize: 10, fontWeight: "800" },
   setCardScore: {
-    color: "#FFF",
+    color: colors.text,
     fontSize: 14,
     fontWeight: "900",
     marginTop: 2,
   },
 
   alignmentBox: {
-    backgroundColor: "#17181D",
-    borderRadius: 16,
+    ...ui.card,
     padding: 14,
     marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
   },
   setupFocus: {
-    backgroundColor: "#17181D",
+    backgroundColor: colors.surface,
     borderRadius: 16,
     padding: 14,
     marginBottom: 16,
     borderWidth: 1.5,
-    borderColor: "#E53935",
+    borderColor: colors.primary,
   },
   setupKicker: {
-    color: "#E53935",
+    color: colors.primary,
     fontSize: 10,
     fontWeight: "900",
     letterSpacing: 1.1,
   },
   setupTitle: {
-    color: "#FFF",
+    color: colors.text,
     fontSize: 20,
     fontWeight: "900",
     marginTop: 3,
@@ -1907,7 +1883,7 @@ const styles = StyleSheet.create({
   },
   setupTeam: {
     borderTopWidth: 1,
-    borderTopColor: "#2B2D35",
+    borderTopColor: colors.border,
     paddingTop: 12,
     marginTop: 12,
   },
@@ -1917,7 +1893,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 8,
   },
-  setupTeamStatus: { color: "#A6A8AE", fontSize: 11, fontWeight: "800" },
+  setupTeamStatus: { color: colors.textMuted, fontSize: 11, fontWeight: "800" },
   courtDiagram: {
     backgroundColor: "#252A2E",
     borderRadius: 10,
@@ -1933,12 +1909,12 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 6,
     borderWidth: 1,
-    borderColor: "#353845",
+    borderColor: colors.borderStrong,
   },
   p1Selector: { borderColor: "#FFB74D" },
-  courtJersey: { color: "#FFF", fontSize: 18, fontWeight: "900", marginTop: 1 },
+  courtJersey: { color: colors.text, fontSize: 18, fontWeight: "900", marginTop: 1 },
   selectorHint: {
-    color: "#70737C",
+    color: colors.textSubtle,
     fontSize: 7,
     fontWeight: "900",
     marginTop: 3,
@@ -1946,48 +1922,48 @@ const styles = StyleSheet.create({
   netLine: {
     height: 15,
     borderTopWidth: 2,
-    borderTopColor: "#E53935",
+    borderTopColor: colors.primary,
     marginVertical: 5,
     justifyContent: "center",
     alignItems: "center",
   },
   netLabel: {
-    color: "#E53935",
+    color: colors.primary,
     fontSize: 7,
     fontWeight: "900",
     backgroundColor: "#252A2E",
     paddingHorizontal: 5,
   },
   controlLabel: {
-    color: "#70737C",
+    color: colors.textSubtle,
     fontSize: 9,
     fontWeight: "900",
     letterSpacing: 0.6,
   },
-  controlNote: { color: "#A6A8AE", fontSize: 10, marginTop: 4 },
+  controlNote: { color: colors.textMuted, fontSize: 10, marginTop: 4 },
   compactChoice: {
-    backgroundColor: "#2B2D35",
+    backgroundColor: colors.border,
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 6,
   },
-  compactChoiceActive: { backgroundColor: "#E53935" },
+  compactChoiceActive: { backgroundColor: colors.primaryPressed },
   firstServeBar: {
     borderTopWidth: 1,
-    borderTopColor: "#2B2D35",
+    borderTopColor: colors.border,
     marginTop: 14,
     paddingTop: 12,
   },
   firstServeChoices: { flexDirection: "row", gap: 8, marginTop: 8 },
   serveChoice: {
     flex: 1,
-    backgroundColor: "#2B2D35",
+    backgroundColor: colors.border,
     borderRadius: 8,
     padding: 10,
     alignItems: "center",
   },
-  serveChoiceActive: { backgroundColor: "#E53935" },
-  serveChoiceText: { color: "#FFF", fontSize: 11, fontWeight: "900" },
+  serveChoiceActive: { backgroundColor: colors.primaryPressed },
+  serveChoiceText: { color: colors.text, fontSize: 11, fontWeight: "900" },
   scoreboardLockedCard: { opacity: 0.66 },
   scoreboardLocked: {
     backgroundColor: "#211D21",
@@ -2003,7 +1979,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: 0.7,
   },
-  scoreboardLockedText: { color: "#A6A8AE", fontSize: 11, marginTop: 3 },
+  scoreboardLockedText: { color: colors.textMuted, fontSize: 11, marginTop: 3 },
   alignmentSummary: { marginTop: 2 },
   summaryHeader: {
     flexDirection: "row",
@@ -2011,17 +1987,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 8,
   },
-  summarySubline: { color: "#70737C", fontSize: 10, marginTop: -4 },
+  summarySubline: { color: colors.textSubtle, fontSize: 10, marginTop: -4 },
   expandButton: {
-    backgroundColor: "#2B2D35",
+    backgroundColor: colors.border,
     borderRadius: 7,
     paddingHorizontal: 9,
     paddingVertical: 7,
   },
-  expandButtonText: { color: "#FFF", fontSize: 9, fontWeight: "900" },
-  summaryTeamName: { color: "#FFF", fontSize: 12, fontWeight: "900" },
-  summaryServeActive: { color: "#55C77A" },
-  summaryReceive: { color: "#A6A8AE" },
+  expandButtonText: { color: colors.text, fontSize: 9, fontWeight: "900" },
+  summaryTeamName: { color: colors.text, fontSize: 12, fontWeight: "900" },
+  summaryServeActive: { color: colors.success },
+  summaryReceive: { color: colors.textMuted },
   rotationPulse: {
     backgroundColor: "#243D2D",
     borderRadius: 7,
@@ -2034,7 +2010,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     textAlign: "center",
   },
-  alignmentHint: { color: "#A6A8AE", fontSize: 10, marginBottom: 8 },
+  alignmentHint: { color: colors.textMuted, fontSize: 10, marginBottom: 8 },
   lineupTeam: { marginBottom: 14 },
   courtGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   courtCell: {
@@ -2044,13 +2020,13 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 7,
     borderWidth: 1,
-    borderColor: "#353845",
+    borderColor: colors.borderStrong,
   },
-  serverCell: { borderColor: "#55C77A", backgroundColor: "#192A20" },
-  courtPosition: { color: "#E53935", fontSize: 10, fontWeight: "900" },
-  courtPlayer: { color: "#FFF", fontSize: 10, fontWeight: "700", marginTop: 3 },
+  serverCell: { borderColor: colors.success, backgroundColor: "#192A20" },
+  courtPosition: { color: colors.primary, fontSize: 10, fontWeight: "900" },
+  courtPlayer: { color: colors.text, fontSize: 10, fontWeight: "700", marginTop: 3 },
   serverMark: {
-    color: "#55C77A",
+    color: colors.success,
     fontSize: 8,
     fontWeight: "900",
     marginTop: 3,
@@ -2069,28 +2045,26 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   positionBtn: {
-    backgroundColor: "#2B2D35",
+    backgroundColor: colors.border,
     borderRadius: 6,
     paddingHorizontal: 9,
     paddingVertical: 6,
   },
-  positionBtnActive: { backgroundColor: "#E53935" },
-  positionBtnText: { color: "#FFF", fontSize: 10, fontWeight: "800" },
+  positionBtnActive: { backgroundColor: colors.primaryPressed },
+  positionBtnText: { color: colors.text, fontSize: 10, fontWeight: "800" },
   servingTeamBtn: {
-    backgroundColor: "#2B2D35",
+    backgroundColor: colors.border,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 8,
     maxWidth: "48%",
   },
   primaryAction: {
-    backgroundColor: "#E53935",
-    borderRadius: 9,
+    ...ui.button, backgroundColor: colors.primaryPressed,
     padding: 12,
-    alignItems: "center",
     marginTop: 12,
   },
-  primaryActionText: { color: "#FFF", fontSize: 12, fontWeight: "900" },
+  primaryActionText: { color: colors.text, fontSize: 12, fontWeight: "900" },
   faultAction: {
     borderColor: "#FFB74D",
     borderWidth: 1,
@@ -2130,21 +2104,19 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   walkoverButtonDisabled: { opacity: 0.45 },
-  walkoverButtonText: { color: "#FFF", fontSize: 12, fontWeight: "900" },
+  walkoverButtonText: { color: colors.text, fontSize: 12, fontWeight: "900" },
   smallAction: {
-    backgroundColor: "#2B2D35",
+    backgroundColor: colors.border,
     borderRadius: 7,
     padding: 8,
     maxWidth: "48%",
   },
   smallActionActive: { backgroundColor: "#7A3F1C" },
-  smallActionText: { color: "#FFF", fontSize: 10, fontWeight: "800" },
+  smallActionText: { color: colors.text, fontSize: 10, fontWeight: "800" },
   inlineInputs: { flexDirection: "row", gap: 8, marginTop: 8 },
   countInput: {
+    ...ui.field,
     flex: 1,
-    backgroundColor: "#101114",
-    color: "#FFF",
-    borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
     fontSize: 12,
@@ -2157,19 +2129,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 8,
   },
-  timeoutHint: { color: "#70737C", fontSize: 10 },
+  timeoutHint: { color: colors.textSubtle, fontSize: 10 },
   timeoutButtons: { flexDirection: "row", gap: 10 },
   timeoutBtn: {
     flex: 1,
-    backgroundColor: "#1C1E23",
+    backgroundColor: colors.surfaceRaised,
     borderRadius: 12,
     padding: 12,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#2B2D35",
+    borderColor: colors.border,
   },
-  timeoutBtnUsed: { opacity: 0.5, backgroundColor: "#141518" },
-  timeoutBtnText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
+  timeoutBtnUsed: { opacity: 0.5, backgroundColor: colors.input },
+  timeoutBtnText: { color: colors.text, fontSize: 12, fontWeight: "800" },
   timeoutBadge: {
     color: "#FFB74D",
     fontSize: 10,
@@ -2178,58 +2150,55 @@ const styles = StyleSheet.create({
   },
 
   correctionBox: {
-    backgroundColor: "#1C1E23",
+    backgroundColor: colors.surfaceRaised,
     borderRadius: 12,
     padding: 12,
     marginBottom: 12,
   },
   correctionTitle: {
-    color: "#FF8D8D",
+    color: colors.dangerText,
     fontSize: 12,
     fontWeight: "800",
     marginBottom: 6,
   },
   reasonInput: {
-    backgroundColor: "#101114",
-    color: "#FFF",
-    borderRadius: 8,
+    ...ui.field,
     paddingHorizontal: 10,
     paddingVertical: 8,
     fontSize: 12,
   },
 
   errorText: {
-    color: "#FF8D8D",
+    color: colors.dangerText,
     fontSize: 12,
     marginBottom: 12,
     textAlign: "center",
   },
 
   historyToggle: { paddingVertical: 10, alignItems: "center" },
-  historyToggleText: { color: "#70737C", fontSize: 12, fontWeight: "800" },
+  historyToggleText: { color: colors.textSubtle, fontSize: 12, fontWeight: "800" },
   historyContainer: {
-    backgroundColor: "#17181D",
-    borderRadius: 12,
+    ...ui.card,
     padding: 12,
     marginTop: 8,
     gap: 8,
   },
-  emptyHistoryText: { color: "#70737C", fontSize: 11, textAlign: "center" },
+  emptyHistoryText: { color: colors.textSubtle, fontSize: 11, textAlign: "center" },
   historyItem: {
     borderBottomWidth: 1,
-    borderBottomColor: "#2B2D35",
+    borderBottomColor: colors.border,
     paddingBottom: 6,
   },
-  historyTeam: { color: "#FFF", fontSize: 12, fontWeight: "800" },
-  historyTime: { color: "#70737C", fontSize: 10 },
+  historyTeam: { color: colors.text, fontSize: 12, fontWeight: "800" },
+  historyTime: { color: colors.textSubtle, fontSize: 10 },
   historyReason: { color: "#FFB74D", fontSize: 10, marginTop: 2 },
 
   buttonSecondary: {
-    backgroundColor: "#2B2D35",
+    ...ui.button,
+    backgroundColor: colors.border,
     padding: 12,
-    borderRadius: 8,
     marginTop: 12,
   },
-  buttonSecondaryText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
+  buttonSecondaryText: { color: colors.text, fontSize: 12, fontWeight: "800" },
   pressed: { opacity: 0.72 },
 });

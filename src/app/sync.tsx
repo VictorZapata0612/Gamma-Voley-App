@@ -1,3 +1,5 @@
+import { ClubDialog, useClubDialog } from "@/ui/ClubDialog";
+import { colors, screenContent, ui } from "@/ui/theme";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 import {
@@ -10,6 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useSQLiteContext } from "expo-sqlite";
+import { resetMatchLocallyForReplay } from "@/database/repositories";
 import { SupabaseSyncProvider } from "@/services/apiProvider";
 import {
   getFailedSyncOperations,
@@ -26,6 +29,7 @@ import {
 } from "@/services/export";
 
 export default function SyncScreen() {
+  const dialog = useClubDialog();
   const db = useSQLiteContext();
   const [stats, setStats] = useState({
     pendingCount: 0,
@@ -35,6 +39,7 @@ export default function SyncScreen() {
   const [pendingItems, setPendingItems] = useState<SyncQueueItem[]>([]);
   const [failedItems, setFailedItems] = useState<SyncQueueItem[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const [lastSyncResult, setLastSyncResult] = useState<SyncResult | null>(null);
   const [reportText, setReportText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,7 +69,7 @@ export default function SyncScreen() {
     }, [loadData]),
   );
 
-  async function handleRetryFailedSets() {
+  async function handleRetryFailedOperations() {
     setIsSyncing(true);
     setError(null);
 
@@ -72,7 +77,7 @@ export default function SyncScreen() {
       const resetCount = await retryFailedSyncOperations(db);
 
       if (resetCount === 0) {
-        setError("No se encontraron sets fallidos para reintentar.");
+        setError("No se encontraron operaciones fallidas para reintentar.");
         await loadData();
         return;
       }
@@ -86,7 +91,7 @@ export default function SyncScreen() {
       setError(
         err instanceof Error
           ? err.message
-          : "No se pudieron reintentar los sets fallidos.",
+          : "No se pudieron reintentar las operaciones fallidas.",
       );
     } finally {
       setIsSyncing(false);
@@ -109,6 +114,44 @@ export default function SyncScreen() {
     } finally {
       setIsSyncing(false);
     }
+  }
+
+  function handleResetLegionGammaA() {
+    dialog.open(
+      "Restablecer partido",
+      "Se borrarán de este dispositivo el marcador, sets, alineaciones, tiempos muertos y operaciones locales de LEGION vs GAMMA VOLEY A. Asegúrate de haber ejecutado primero el reinicio en Supabase.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Restablecer",
+          style: "destructive",
+          onPress: () => {
+            void (async () => {
+              setIsResetting(true);
+              setError(null);
+
+              try {
+                await resetMatchLocallyForReplay(db, "group-a-5");
+                await loadData();
+
+                dialog.open(
+                  "Partido reiniciado",
+                  "El estado local quedó programado y en 0-0. Confirma en la pantalla del partido que aparezca así.",
+                );
+              } catch (reason) {
+                setError(
+                  reason instanceof Error
+                    ? reason.message
+                    : "No se pudo reiniciar el partido local.",
+                );
+              } finally {
+                setIsResetting(false);
+              }
+            })();
+          },
+        },
+      ],
+    );
   }
 
   async function handleGenerateReport() {
@@ -189,15 +232,15 @@ export default function SyncScreen() {
 
         <Pressable
           onPress={() => void handleSyncNow()}
-          disabled={isSyncing}
+          disabled={isSyncing || isResetting}
           style={({ pressed }) => [
             styles.syncButton,
-            isSyncing && styles.syncButtonDisabled,
+            (isSyncing || isResetting) && styles.syncButtonDisabled,
             pressed && styles.pressed,
           ]}
         >
           {isSyncing ? (
-            <ActivityIndicator color="#FFFFFF" size="small" />
+            <ActivityIndicator color={colors.text} size="small" />
           ) : (
             <Text style={styles.syncButtonText}>⚡ Sincronizar pendientes</Text>
           )}
@@ -205,21 +248,42 @@ export default function SyncScreen() {
 
         {failedItems.some(
           (item) =>
-            item.entityType === "match_set" && item.operation === "save_set",
+            (item.entityType === "match_set" && item.operation === "save_set") ||
+            (item.entityType === "rotation_event" && item.operation === "save_rotation"),
         ) && (
           <Pressable
-            onPress={() => void handleRetryFailedSets()}
-            disabled={isSyncing}
+            onPress={() => void handleRetryFailedOperations()}
+            disabled={isSyncing || isResetting}
             style={({ pressed }) => [
               styles.syncButton,
               styles.retryFailedButton,
-              isSyncing && styles.syncButtonDisabled,
+              (isSyncing || isResetting) && styles.syncButtonDisabled,
               pressed && styles.pressed,
             ]}
           >
-            <Text style={styles.syncButtonText}>Reintentar sets fallidos</Text>
+            <Text style={styles.syncButtonText}>Reintentar sets y rotaciones fallidos</Text>
           </Pressable>
         )}
+
+        <Pressable
+          accessibilityRole="button"
+          onPress={handleResetLegionGammaA}
+          disabled={isSyncing || isResetting}
+          style={({ pressed }) => [
+            styles.syncButton,
+            styles.resetButton,
+            (isSyncing || isResetting) && styles.syncButtonDisabled,
+            pressed && styles.pressed,
+          ]}
+        >
+          {isResetting ? (
+            <ActivityIndicator color={colors.text} size="small" />
+          ) : (
+            <Text style={styles.syncButtonText}>
+              Restablecer LEGION vs GAMMA VOLEY A
+            </Text>
+          )}
+        </Pressable>
 
         <View style={styles.exportBox}>
           <Text style={styles.exportTitle}>
@@ -346,100 +410,91 @@ export default function SyncScreen() {
           ))
         )}
       </ScrollView>
+    <ClubDialog prompt={dialog.prompt} close={dialog.close} />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#101114" },
-  container: {
-    flexGrow: 1,
-    padding: 18,
-    paddingTop: 20,
-    paddingBottom: 36,
-  },
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { ...screenContent   },
   retryFailedButton: {
+    ...ui.button,
     backgroundColor: "#8E3033",
     marginTop: -8,
   },
+  resetButton: {
+    ...ui.button,
+    backgroundColor: "#8E3033",
+  },
   back: {
-    color: "#E53935",
+    color: colors.primary,
     fontSize: 14,
     fontWeight: "700",
     marginBottom: 18,
   },
   eyebrow: {
-    color: "#E53935",
+    color: colors.primary,
     fontSize: 10,
     fontWeight: "900",
     letterSpacing: 1.2,
   },
-  title: { color: "#FFF", fontSize: 28, fontWeight: "900", marginTop: 4 },
+  title: { letterSpacing: -1, color: colors.text, fontSize: 34, fontWeight: "900", marginTop: 4 },
   subtitle: {
-    color: "#A6A8AE",
+    color: colors.textMuted,
     fontSize: 12,
     marginTop: 4,
     marginBottom: 16,
   },
-
   statsRow: { flexDirection: "row", gap: 8, marginBottom: 16 },
   statBox: {
+    ...ui.card,
     flex: 1,
-    backgroundColor: "#17181D",
-    borderRadius: 14,
     padding: 12,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#2B2D35",
   },
   statBoxPending: { borderColor: "#F57C00", backgroundColor: "#23180D" },
-  statBoxError: { borderColor: "#E53935", backgroundColor: "#231214" },
-  statNumber: { color: "#FFF", fontSize: 22, fontWeight: "900" },
+  statBoxError: { borderColor: colors.primary, backgroundColor: "#231214" },
+  statNumber: { color: colors.text, fontSize: 22, fontWeight: "900" },
   statNumberPending: { color: "#FFB74D" },
   statNumberSynced: { color: "#81C784" },
-  statNumberError: { color: "#FF8D8D" },
+  statNumberError: { color: colors.dangerText },
   statLabel: {
-    color: "#70737C",
+    color: colors.textSubtle,
     fontSize: 10,
     fontWeight: "800",
     marginTop: 2,
   },
-
   syncButton: {
-    backgroundColor: "#E53935",
+    ...ui.button, backgroundColor: colors.primaryPressed,
     paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: "center",
     marginBottom: 16,
   },
   syncButtonDisabled: { opacity: 0.6 },
-  syncButtonText: { color: "#FFF", fontSize: 14, fontWeight: "900" },
-
+  syncButtonText: { color: colors.text, fontSize: 14, fontWeight: "900" },
   exportBox: {
-    backgroundColor: "#17181D",
+    backgroundColor: colors.surface,
     borderRadius: 14,
     padding: 14,
     borderWidth: 1,
-    borderColor: "#2B2D35",
+    borderColor: colors.border,
     marginBottom: 16,
   },
-  exportTitle: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
+  exportTitle: { color: colors.text, fontSize: 14, fontWeight: "800" },
   exportSub: {
-    color: "#A6A8AE",
+    color: colors.textMuted,
     fontSize: 11,
     marginTop: 2,
     marginBottom: 10,
   },
   exportBtn: {
-    backgroundColor: "#2B2D35",
+    ...ui.button,
+    backgroundColor: colors.border,
     paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: "center",
   },
-  exportBtnText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
-
+  exportBtnText: { color: colors.text, fontSize: 12, fontWeight: "800" },
   reportPreviewCard: {
-    backgroundColor: "#101114",
+    backgroundColor: colors.background,
     borderRadius: 10,
     padding: 12,
     marginTop: 12,
@@ -453,18 +508,14 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   reportCodeText: {
-    color: "#C2C4CA",
+    color: colors.textMuted,
     fontSize: 10,
     fontFamily: "monospace",
     lineHeight: 14,
   },
-
   resultCard: {
-    backgroundColor: "#1C1E23",
-    borderRadius: 12,
+    ...ui.card,
     padding: 12,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
     marginBottom: 16,
   },
   resultTitle: {
@@ -473,40 +524,31 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginBottom: 4,
   },
-  resultText: { color: "#A6A8AE", fontSize: 11, lineHeight: 16 },
-
+  resultText: { color: colors.textMuted, fontSize: 11, lineHeight: 16 },
   sectionTitle: {
-    color: "#FFF",
+    color: colors.text,
     fontSize: 15,
     fontWeight: "800",
     marginBottom: 10,
   },
   failedSectionTitle: { marginTop: 18 },
-
   emptyCard: {
-    backgroundColor: "#17181D",
-    borderRadius: 16,
+    ...ui.card,
     padding: 24,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#2B2D35",
   },
   emptyIcon: { fontSize: 32, marginBottom: 8 },
-  emptyTitle: { color: "#FFF", fontSize: 14, fontWeight: "800" },
+  emptyTitle: { color: colors.text, fontSize: 14, fontWeight: "800" },
   emptyText: {
-    color: "#A6A8AE",
+    color: colors.textMuted,
     fontSize: 11,
     textAlign: "center",
     marginTop: 4,
   },
-
   itemCard: {
-    backgroundColor: "#1C1E23",
-    borderRadius: 12,
+    ...ui.card,
     padding: 12,
     marginBottom: 8,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
   },
   failedItemCard: { borderColor: "#8E3033" },
   itemTopRow: {
@@ -516,25 +558,24 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   entityTag: {
-    backgroundColor: "#2B2D35",
+    backgroundColor: colors.border,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
   },
-  entityTagText: { color: "#A6A8AE", fontSize: 9, fontWeight: "900" },
+  entityTagText: { color: colors.textMuted, fontSize: 9, fontWeight: "900" },
   statusTag: { color: "#FFB74D", fontSize: 9, fontWeight: "900" },
-  failedStatusTag: { color: "#FF8D8D", fontSize: 9, fontWeight: "900" },
-  itemOpText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
-  itemIdText: { color: "#A6A8AE", fontSize: 10, marginTop: 3 },
+  failedStatusTag: { color: colors.dangerText, fontSize: 9, fontWeight: "900" },
+  itemOpText: { color: colors.text, fontSize: 12, fontWeight: "800" },
+  itemIdText: { color: colors.textMuted, fontSize: 10, marginTop: 3 },
   itemErrorText: {
-    color: "#FF8D8D",
+    color: colors.dangerText,
     fontSize: 11,
     marginTop: 6,
     lineHeight: 16,
   },
-
   errorText: {
-    color: "#FF8D8D",
+    color: colors.dangerText,
     fontSize: 12,
     marginBottom: 12,
     textAlign: "center",

@@ -1,3 +1,4 @@
+import { colors, screenContent, ui } from "@/ui/theme";
 import { useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
@@ -170,26 +171,22 @@ function Field(props: {
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{props.label}</Text>
-      <TextInput {...props} placeholderTextColor="#70737C" style={styles.input} />
+      <TextInput {...props} placeholderTextColor={colors.textSubtle} style={styles.input} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#101114" },
-  container: { flexGrow: 1, padding: 22, paddingTop: 22, paddingBottom: 36 },
-  back: { color: "#E53935", fontWeight: "700", marginBottom: 18 },
-  eyebrow: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
-  title: { color: "#FFF", fontSize: 26, fontWeight: "900", marginTop: 4, marginBottom: 22 },
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { ...screenContent },
+  back: { color: colors.primary, fontWeight: "700", marginBottom: 18 },
+  eyebrow: { color: colors.primary, fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
+  title: { letterSpacing: -1, color: colors.text, fontSize: 34, fontWeight: "900", marginTop: 4, marginBottom: 22 },
 
   field: { marginBottom: 18 },
-  label: { color: "#FFF", fontSize: 13, fontWeight: "700", marginBottom: 8 },
+  label: { color: colors.text, fontSize: 13, fontWeight: "700", marginBottom: 8 },
   input: {
-    backgroundColor: "#1C1E23",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#30323A",
-    color: "#FFF",
+    ...ui.field,
     padding: 14,
     fontSize: 14,
   },
@@ -197,29 +194,28 @@ const styles = StyleSheet.create({
   selectorField: { marginBottom: 20 },
   optionsRow: { flexDirection: "row", gap: 8 },
   optionBtn: {
+    ...ui.button,
     flex: 1,
-    backgroundColor: "#1C1E23",
-    borderRadius: 10,
+    backgroundColor: colors.surfaceRaised,
     paddingVertical: 12,
-    alignItems: "center",
     borderWidth: 1,
-    borderColor: "#30323A",
+    borderColor: colors.border,
   },
-  optionBtnActive: { borderColor: "#E53935", backgroundColor: "#2A181A" },
+  optionBtnActive: { borderColor: colors.primary, backgroundColor: "#2A181A" },
   optionBtnEligible: { borderColor: "#4CAF50", backgroundColor: "#162B1F" },
-  optionBtnPending: { borderColor: "#F1C46A", backgroundColor: "#2B2215" },
-  optionBtnIneligible: { borderColor: "#E53935", backgroundColor: "#2A181A" },
+  optionBtnPending: { borderColor: colors.warning, backgroundColor: "#2B2215" },
+  optionBtnIneligible: { borderColor: colors.primary, backgroundColor: "#2A181A" },
 
-  optionText: { color: "#70737C", fontSize: 11, fontWeight: "800" },
-  optionTextActive: { color: "#FF8D8D" },
+  optionText: { color: colors.textSubtle, fontSize: 11, fontWeight: "800" },
+  optionTextActive: { color: colors.dangerText },
   optionTextEligible: { color: "#81C784" },
-  optionTextPending: { color: "#F1C46A" },
-  optionTextIneligible: { color: "#FF8D8D" },
+  optionTextPending: { color: colors.warning },
+  optionTextIneligible: { color: colors.dangerText },
 
-  note: { color: "#A6A8AE", fontSize: 11, lineHeight: 16, marginVertical: 12 },
-  error: { color: "#FF8D8D", marginBottom: 10, fontSize: 12 },
-  primary: { backgroundColor: "#E53935", borderRadius: 14, padding: 16, alignItems: "center", marginTop: 10 },
+  note: { color: colors.textMuted, fontSize: 11, lineHeight: 16, marginVertical: 12 },
+  error: { color: colors.dangerText, marginBottom: 10, fontSize: 12 },
+  primary: { ...ui.button, backgroundColor: colors.primaryPressed, padding: 16, marginTop: 10, },
   primaryDisabled: { opacity: 0.55 },
-  primaryText: { color: "#FFF", fontWeight: "800", fontSize: 14 },
+  primaryText: { color: colors.text, fontWeight: "800", fontSize: 14 },
   pressed: { opacity: 0.72 },
 });

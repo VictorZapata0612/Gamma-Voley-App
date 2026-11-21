@@ -606,6 +606,84 @@ export async function getLiveMatch(
   };
 }
 
+export async function resetMatchLocallyForReplay(
+  db: SQLiteDatabase,
+  matchId: string,
+): Promise<void> {
+  const match = await db.getFirstAsync<{ phase: string }>(
+    "SELECT phase FROM matches WHERE id = ?",
+    matchId,
+  );
+
+  if (!match) {
+    throw new Error("El partido no existe en este dispositivo.");
+  }
+
+  if (match.phase !== "group") {
+    throw new Error("Esta función está preparada para partidos de grupos.");
+  }
+
+  const now = new Date().toISOString();
+  const matchIdPattern = `${matchId}-%`;
+  const matchIdSearch = `%${matchId}%`;
+
+  await withDatabaseTransaction(db, async () => {
+    await db.runAsync(
+      `DELETE FROM sync_queue
+       WHERE entity_id = ?
+          OR entity_id LIKE ?
+          OR operation_id LIKE ?
+          OR payload_json LIKE ?`,
+      matchId,
+      matchIdPattern,
+      matchIdSearch,
+      matchIdSearch,
+    );
+
+    await db.runAsync(
+      `DELETE FROM sync_conflicts
+       WHERE entity_id = ?
+          OR entity_id LIKE ?
+          OR local_payload_json LIKE ?
+          OR remote_payload_json LIKE ?`,
+      matchId,
+      matchIdPattern,
+      matchIdSearch,
+      matchIdSearch,
+    );
+
+    await db.runAsync("DELETE FROM score_events WHERE match_id = ?", matchId);
+    await db.runAsync("DELETE FROM timeouts WHERE match_id = ?", matchId);
+    await db.runAsync("DELETE FROM rotation_events WHERE match_id = ?", matchId);
+    await db.runAsync("DELETE FROM rotation_faults WHERE match_id = ?", matchId);
+    await db.runAsync("DELETE FROM substitution_events WHERE match_id = ?", matchId);
+    await db.runAsync("DELETE FROM match_lineups WHERE match_id = ?", matchId);
+    await db.runAsync("DELETE FROM set_alignment_state WHERE match_id = ?", matchId);
+    await db.runAsync("DELETE FROM walkover_events WHERE match_id = ?", matchId);
+    await db.runAsync("DELETE FROM match_sets WHERE match_id = ?", matchId);
+
+    await db.runAsync(
+      `INSERT INTO match_sets
+       (match_id, set_number, home_points, away_points)
+       VALUES (?, 1, 0, 0), (?, 2, 0, 0)`,
+      matchId,
+      matchId,
+    );
+
+    await db.runAsync(
+      `UPDATE matches
+       SET status = 'scheduled',
+           winner = NULL,
+           walkover_team_id = NULL,
+           current_set = 1,
+           updated_at = ?
+       WHERE id = ?`,
+      now,
+      matchId,
+    );
+  });
+}
+
 export async function listEligiblePlayersForMatch(
   db: SQLiteDatabase,
   matchId: string,

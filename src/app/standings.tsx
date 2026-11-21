@@ -1,6 +1,8 @@
+import { ClubDialogContent, useClubDialog } from "@/ui/ClubDialog";
+import { colors, screenContent, ui } from "@/ui/theme";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
@@ -27,6 +29,7 @@ import { useTournamentRealtime } from "@/hooks/useTournamentRealtime";
 import { reconcileRemoteTournament } from "@/services/realtime";
 
 export default function StandingsScreen() {
+  const dialog = useClubDialog();
   const db = useSQLiteContext();
   const [teams, setTeams] = useState<GroupTeamRecord[]>([]);
   const [results, setResults] = useState<Awaited<ReturnType<typeof listGroupResults>>>([]);
@@ -134,7 +137,7 @@ const confirmResolution = () => {
     setMessage("El criterio y el nombre del organizador son obligatorios.");
     return;
   }
-  Alert.alert(
+  dialog.open(
     "Confirmar resolución oficial",
     `Clasifica a ${getTeamName(selectedTeam)} con el criterio registrado. Esta decisión quedará visible como oficial.`,
     [
@@ -499,38 +502,44 @@ const confirmResolution = () => {
           )}
         </View>
       </ScrollView>
-      <Modal visible={resolutionGroup !== null} transparent animationType="slide" onRequestClose={() => setResolutionGroup(null)}>
+      <Modal visible={resolutionGroup !== null} transparent animationType="slide" onRequestClose={dialog.prompt ? dialog.close : () => setResolutionGroup(null)}>
         <View style={styles.modalBackdrop}>
-          <View style={styles.resolutionModal}>
-            <Text style={styles.resolutionModalEyebrow}>PANEL DEL ORGANIZADOR</Text>
-            <Text style={styles.resolutionModalTitle}>Resolver empate · Grupo {resolutionGroup}</Text>
-            <Text style={styles.resolutionModalText}>
-              Equipos afectados: {(resolutionGroup === "A" ? rawRowsA : rawRowsB)
-                .filter((row) => row.tiedForQualification)
-                .map((row) => getTeamName(row.teamId))
-                .join(" y ")}.
-            </Text>
-            <Text style={styles.inputLabel}>Equipo clasificado</Text>
-            {(resolutionGroup === "A" ? rawRowsA : rawRowsB)
-              .filter((row) => row.tiedForQualification)
-              .map((row) => (
-                <Pressable
-                  key={row.teamId}
-                  onPress={() => setSelectedQualifiedTeamId(row.teamId)}
-                  style={[styles.candidateButton, selectedQualifiedTeamId === row.teamId && styles.candidateButtonSelected]}
-                >
-                  <Text style={styles.candidateButtonText}>{getTeamName(row.teamId)}{selectedQualifiedTeamId === row.teamId ? " · seleccionado" : ""}</Text>
-                </Pressable>
-              ))}
-            <Text style={styles.inputLabel}>Criterio aplicado</Text>
-            <TextInput value={criterion} onChangeText={setCriterion} placeholder="Describe el criterio del reglamento" placeholderTextColor="#777A83" style={styles.resolutionInput} />
-            <Text style={styles.inputLabel}>Organizador responsable</Text>
-            <TextInput value={decidedBy} onChangeText={setDecidedBy} placeholder="Nombre del organizador" placeholderTextColor="#777A83" style={styles.resolutionInput} />
-            <View style={styles.modalActions}>
-              <Pressable onPress={() => setResolutionGroup(null)} style={styles.cancelButton}><Text style={styles.cancelButtonText}>Cancelar</Text></Pressable>
-              <Pressable onPress={confirmResolution} style={styles.confirmButton}><Text style={styles.confirmButtonText}>Confirmar decisión</Text></Pressable>
-            </View>
-          </View>
+          <ScrollView style={styles.resolutionModal} keyboardShouldPersistTaps="handled" accessibilityViewIsModal>
+            {dialog.prompt ? (
+              <ClubDialogContent prompt={dialog.prompt} close={dialog.close} />
+            ) : (
+              <>
+                <Text style={styles.resolutionModalEyebrow}>PANEL DEL ORGANIZADOR</Text>
+                <Text style={styles.resolutionModalTitle}>Resolver empate · Grupo {resolutionGroup}</Text>
+                <Text style={styles.resolutionModalText}>
+                  Equipos afectados: {(resolutionGroup === "A" ? rawRowsA : rawRowsB)
+                    .filter((row) => row.tiedForQualification)
+                    .map((row) => getTeamName(row.teamId))
+                    .join(" y ")}.
+                </Text>
+                <Text style={styles.inputLabel}>Equipo clasificado</Text>
+                {(resolutionGroup === "A" ? rawRowsA : rawRowsB)
+                  .filter((row) => row.tiedForQualification)
+                  .map((row) => (
+                    <Pressable
+                      key={row.teamId}
+                      onPress={() => setSelectedQualifiedTeamId(row.teamId)}
+                      style={[styles.candidateButton, selectedQualifiedTeamId === row.teamId && styles.candidateButtonSelected]}
+                    >
+                      <Text style={styles.candidateButtonText}>{getTeamName(row.teamId)}{selectedQualifiedTeamId === row.teamId ? " · seleccionado" : ""}</Text>
+                    </Pressable>
+                  ))}
+                <Text style={styles.inputLabel}>Criterio aplicado</Text>
+                <TextInput value={criterion} onChangeText={setCriterion} placeholder="Describe el criterio del reglamento" placeholderTextColor={colors.textSubtle} style={styles.resolutionInput} />
+                <Text style={styles.inputLabel}>Organizador responsable</Text>
+                <TextInput value={decidedBy} onChangeText={setDecidedBy} placeholder="Nombre del organizador" placeholderTextColor={colors.textSubtle} style={styles.resolutionInput} />
+                <View style={styles.modalActions}>
+                  <Pressable onPress={() => setResolutionGroup(null)} style={styles.cancelButton}><Text style={styles.cancelButtonText}>Cancelar</Text></Pressable>
+                  <Pressable onPress={confirmResolution} style={styles.confirmButton}><Text style={styles.confirmButtonText}>Confirmar decisión</Text></Pressable>
+                </View>
+              </>
+            )}
+          </ScrollView>
         </View>
       </Modal>
     </SafeAreaView>
@@ -538,12 +547,12 @@ const confirmResolution = () => {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#101114" },
-  container: { flexGrow: 1, padding: 18, paddingTop: 20, paddingBottom: 36 },
-  back: { color: "#E53935", fontSize: 14, fontWeight: "700", marginBottom: 20 },
-  eyebrow: { color: "#E53935", fontSize: 11, fontWeight: "900", letterSpacing: 1.4 },
-  title: { color: "#FFF", fontSize: 28, fontWeight: "900", marginTop: 4 },
-  subtitle: { color: "#A6A8AE", fontSize: 12, marginTop: 4, marginBottom: 16 },
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { ...screenContent },
+  back: { color: colors.primary, fontSize: 14, fontWeight: "700", marginBottom: 20 },
+  eyebrow: { color: colors.primary, fontSize: 11, fontWeight: "900", letterSpacing: 1.4 },
+  title: { letterSpacing: -1, color: colors.text, fontSize: 34, fontWeight: "900", marginTop: 4 },
+  subtitle: { color: colors.textMuted, fontSize: 12, marginTop: 4, marginBottom: 16 },
 
   championCard: {
     backgroundColor: "#2B2012",
@@ -555,8 +564,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   championEyebrow: { color: "#FFD54F", fontSize: 11, fontWeight: "900", letterSpacing: 1.2 },
-  championName: { color: "#FFFFFF", fontSize: 24, fontWeight: "900", marginTop: 4 },
-  championPrize: { color: "#55C77A", fontSize: 14, fontWeight: "800", marginTop: 2 },
+  championName: { color: colors.text, fontSize: 24, fontWeight: "900", marginTop: 4 },
+  championPrize: { color: colors.success, fontSize: 14, fontWeight: "800", marginTop: 2 },
   championSub: { color: "#E2C98E", fontSize: 11, marginTop: 4 },
 
   filterRow: { flexDirection: "row", gap: 8, marginBottom: 16 },
@@ -564,46 +573,43 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: "#1C1E23",
+    backgroundColor: colors.surfaceRaised,
     borderWidth: 1,
-    borderColor: "#2B2D35",
+    borderColor: colors.border,
   },
-  filterPillActive: { backgroundColor: "#E53935", borderColor: "#E53935" },
-  filterText: { color: "#A6A8AE", fontSize: 11, fontWeight: "800" },
-  filterTextActive: { color: "#FFF" },
+  filterPillActive: { backgroundColor: colors.primaryPressed, borderColor: colors.primary },
+  filterText: { color: colors.textMuted, fontSize: 11, fontWeight: "800" },
+  filterTextActive: { color: colors.text },
 
   groupCard: {
-    backgroundColor: "#17181D",
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
+    ...ui.card,
     padding: 16,
     marginBottom: 16,
   },
   groupHeader: { marginBottom: 12 },
   groupTitleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   groupBadge: {
-    backgroundColor: "#E53935",
+    backgroundColor: colors.primaryPressed,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
   },
-  groupBadgeB: { backgroundColor: "#1E88E5" },
-  groupBadgeText: { color: "#FFF", fontSize: 11, fontWeight: "900", letterSpacing: 1 },
-  courtName: { color: "#A6A8AE", fontSize: 11, fontWeight: "700" },
-  qualificationNotice: { color: "#55C77A", fontSize: 11, fontWeight: "700", marginTop: 4 },
+  groupBadgeB: { backgroundColor: colors.groupB },
+  groupBadgeText: { color: colors.text, fontSize: 11, fontWeight: "900", letterSpacing: 1 },
+  courtName: { color: colors.textMuted, fontSize: 11, fontWeight: "700" },
+  qualificationNotice: { color: colors.success, fontSize: 11, fontWeight: "700", marginTop: 4 },
 
   emptyContainer: { paddingVertical: 18, alignItems: "center" },
-  emptyText: { color: "#70737C", fontSize: 12, fontStyle: "italic" },
+  emptyText: { color: colors.textSubtle, fontSize: 12, fontStyle: "italic" },
 
   tableHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: "#2B2D35",
+    borderBottomColor: colors.border,
   },
-  colHeader: { color: "#70737C", fontSize: 10, fontWeight: "800" },
+  colHeader: { color: colors.textSubtle, fontSize: 10, fontWeight: "800" },
   colPos: { width: 28, textAlign: "center" },
   colTeam: { flex: 1, paddingLeft: 6 },
   colStat: { width: 30, textAlign: "center" },
@@ -632,19 +638,19 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   posQualified: { backgroundColor: "#2E7D32" },
-  posEliminated: { backgroundColor: "#2B2D35" },
-  posText: { color: "#FFF", fontSize: 11, fontWeight: "900" },
+  posEliminated: { backgroundColor: colors.border },
+  posText: { color: colors.text, fontSize: 11, fontWeight: "900" },
 
   teamInfoCol: { flex: 1, paddingLeft: 8 },
-  teamNameText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
+  teamNameText: { color: colors.text, fontSize: 13, fontWeight: "800" },
   provisionalNotice: { color: "#FFCC80", fontSize: 10, fontWeight: "700", marginTop: 8, lineHeight: 14 },
   provisionalLabel: { color: "#FFCC80", fontSize: 9, fontWeight: "800", marginTop: 1 },
   qualifiedLabel: { color: "#81C784", fontSize: 9, fontWeight: "800", marginTop: 1 },
 
-  statValue: { color: "#A6A8AE", fontSize: 12, fontWeight: "700", fontVariant: ["tabular-nums"] },
-  diffPositive: { color: "#55C77A" },
-  diffNegative: { color: "#FF8D8D" },
-  ptsValue: { color: "#FFFFFF", fontSize: 15, fontWeight: "900", fontVariant: ["tabular-nums"] },
+  statValue: { color: colors.textMuted, fontSize: 12, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  diffPositive: { color: colors.success },
+  diffNegative: { color: colors.dangerText },
+  ptsValue: { color: colors.text, fontSize: 15, fontWeight: "900", fontVariant: ["tabular-nums"] },
 
   tieAlert: {
     backgroundColor: "#2B2215",
@@ -654,7 +660,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#5A4422",
   },
-  tieAlertTitle: { color: "#F1C46A", fontSize: 11, fontWeight: "800" },
+  tieAlertTitle: { color: colors.warning, fontSize: 11, fontWeight: "800" },
   tieAlertText: { color: "#E2C98E", fontSize: 10, marginTop: 2, lineHeight: 14 },
   resolveTieButton: { backgroundColor: "#6A4D1D", borderRadius: 8, paddingVertical: 9, alignItems: "center", marginTop: 10 },
   resolveTieButtonText: { color: "#FFF3D1", fontSize: 11, fontWeight: "900" },
@@ -662,97 +668,91 @@ const styles = StyleSheet.create({
   resolvedTieTitle: { color: "#81C784", fontSize: 11, fontWeight: "900" },
   resolvedTieText: { color: "#C8E6C9", fontSize: 10, marginTop: 3, lineHeight: 14 },
 
-  messageText: { color: "#FF8D8D", fontSize: 12, marginBottom: 12, textAlign: "center" },
+  messageText: { color: colors.dangerText, fontSize: 12, marginBottom: 12, textAlign: "center" },
 
-  modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.72)", justifyContent: "flex-end" },
-  resolutionModal: { backgroundColor: "#17181D", borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 20 },
-  resolutionModalEyebrow: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
-  resolutionModalTitle: { color: "#FFF", fontSize: 20, fontWeight: "900", marginTop: 4 },
-  resolutionModalText: { color: "#A6A8AE", fontSize: 12, lineHeight: 17, marginTop: 8 },
-  inputLabel: { color: "#FFF", fontSize: 11, fontWeight: "800", marginTop: 14, marginBottom: 6 },
-  candidateButton: { borderWidth: 1, borderColor: "#3A3C45", borderRadius: 8, padding: 10, marginTop: 5 },
-  candidateButtonSelected: { borderColor: "#55C77A", backgroundColor: "#193522" },
-  candidateButtonText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
-  resolutionInput: { backgroundColor: "#24262D", borderRadius: 8, color: "#FFF", paddingHorizontal: 10, paddingVertical: 9, fontSize: 12, borderWidth: 1, borderColor: "#3A3C45" },
+  modalBackdrop: { flex: 1, backgroundColor: colors.overlay, justifyContent: "center", padding: 14 },
+  resolutionModal: { ...ui.dialog, flexGrow: 0, maxHeight: "92%" },
+  resolutionModalEyebrow: { color: colors.primary, fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
+  resolutionModalTitle: { color: colors.text, fontSize: 20, fontWeight: "900", marginTop: 4 },
+  resolutionModalText: { color: colors.textMuted, fontSize: 12, lineHeight: 17, marginTop: 8 },
+  inputLabel: { color: colors.text, fontSize: 11, fontWeight: "800", marginTop: 14, marginBottom: 6 },
+  candidateButton: { ...ui.button, borderWidth: 1, borderColor: colors.borderStrong, padding: 10, marginTop: 5, },
+  candidateButtonSelected: { borderColor: colors.success, backgroundColor: "#193522" },
+  candidateButtonText: { color: colors.text, fontSize: 12, fontWeight: "800" },
+  resolutionInput: { ...ui.field, paddingHorizontal: 10, paddingVertical: 9, fontSize: 12, },
   modalActions: { flexDirection: "row", gap: 8, marginTop: 18 },
-  cancelButton: { flex: 1, borderRadius: 8, paddingVertical: 11, alignItems: "center", backgroundColor: "#2B2D35" },
-  cancelButtonText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
-  confirmButton: { flex: 1, borderRadius: 8, paddingVertical: 11, alignItems: "center", backgroundColor: "#E53935" },
-  confirmButtonText: { color: "#FFF", fontSize: 12, fontWeight: "900" },
+  cancelButton: { ...ui.button, flex: 1, paddingVertical: 11, backgroundColor: colors.border, },
+  cancelButtonText: { color: colors.text, fontSize: 12, fontWeight: "800" },
+  confirmButton: { ...ui.button, backgroundColor: colors.primaryPressed, flex: 1, paddingVertical: 11, },
+  confirmButtonText: { color: colors.text, fontSize: 12, fontWeight: "900" },
 
   bracketCard: {
-    backgroundColor: "#17181D",
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
+    ...ui.card,
     padding: 16,
     marginTop: 6,
     marginBottom: 16,
   },
   bracketHeader: { marginBottom: 14 },
-  bracketEyebrow: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
-  bracketTitle: { color: "#FFFFFF", fontSize: 18, fontWeight: "900", marginTop: 3 },
-  bracketDesc: { color: "#A6A8AE", fontSize: 11, lineHeight: 16, marginTop: 4 },
+  bracketEyebrow: { color: colors.primary, fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
+  bracketTitle: { color: colors.text, fontSize: 18, fontWeight: "900", marginTop: 3 },
+  bracketDesc: { color: colors.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4 },
 
   activateBracketBtn: {
-    backgroundColor: "#E53935",
+    ...ui.button, backgroundColor: colors.primaryPressed,
     paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: "center",
     marginBottom: 14,
   },
-  activateBracketText: { color: "#FFFFFF", fontSize: 13, fontWeight: "900" },
+  activateBracketText: { color: colors.text, fontSize: 13, fontWeight: "900" },
 
   matchupBox: {
-    backgroundColor: "#1C1E23",
+    backgroundColor: colors.surfaceRaised,
     borderRadius: 14,
     padding: 12,
     marginBottom: 10,
     borderWidth: 1,
-    borderColor: "#2B2D35",
+    borderColor: colors.border,
   },
   finalMatchupBox: {
     borderColor: "#FFA000",
     backgroundColor: "#1E1A14",
   },
   matchupTagRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
-  matchupTag: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 0.8 },
+  matchupTag: { color: colors.primary, fontSize: 10, fontWeight: "900", letterSpacing: 0.8 },
   finalTag: { color: "#FFB300" },
 
   statusPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   statusLive: { backgroundColor: "#1B3B26" },
-  statusDone: { backgroundColor: "#2B2D35" },
+  statusDone: { backgroundColor: colors.border },
   statusScheduled: { backgroundColor: "#2B2215" },
   statusText: { fontSize: 9, fontWeight: "900" },
-  statusLiveText: { color: "#55C77A" },
-  statusDoneText: { color: "#A6A8AE" },
-  statusScheduledText: { color: "#F1C46A" },
+  statusLiveText: { color: colors.success },
+  statusDoneText: { color: colors.textMuted },
+  statusScheduledText: { color: colors.warning },
 
   matchupTeams: { gap: 6 },
   matchupTeamRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   matchupSeed: {
-    backgroundColor: "#2B2D35",
-    color: "#A6A8AE",
+    backgroundColor: colors.border,
+    color: colors.textMuted,
     fontSize: 9,
     fontWeight: "900",
     paddingHorizontal: 5,
     paddingVertical: 2,
     borderRadius: 4,
   },
-  matchupTeamName: { color: "#FFFFFF", fontSize: 13, fontWeight: "800", flex: 1 },
-  winnerName: { color: "#55C77A" },
-  setsSummaryText: { color: "#A6A8AE", fontSize: 11, fontWeight: "800", fontVariant: ["tabular-nums"] },
+  matchupTeamName: { color: colors.text, fontSize: 13, fontWeight: "800", flex: 1 },
+  winnerName: { color: colors.success },
+  setsSummaryText: { color: colors.textMuted, fontSize: 11, fontWeight: "800", fontVariant: ["tabular-nums"] },
 
-  matchupVs: { color: "#70737C", fontSize: 10, fontWeight: "900", textAlign: "center", marginVertical: 2 },
+  matchupVs: { color: colors.textSubtle, fontSize: 10, fontWeight: "900", textAlign: "center", marginVertical: 2 },
 
   matchActionBtn: {
+    ...ui.button,
     marginTop: 10,
     paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: "#2B2D35",
-    alignItems: "center",
+    backgroundColor: colors.border,
   },
   finalActionBtn: { backgroundColor: "#D84315" },
-  matchActionBtnText: { color: "#FFFFFF", fontSize: 11, fontWeight: "800" },
+  matchActionBtnText: { color: colors.text, fontSize: 11, fontWeight: "800" },
   pressed: { opacity: 0.72 },
 });

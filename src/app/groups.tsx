@@ -1,3 +1,4 @@
+import { colors, screenContent, ui } from "@/ui/theme";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -270,12 +271,12 @@ export default function GroupsScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#101114" },
-  container: { flexGrow: 1, padding: 18, paddingTop: 20, paddingBottom: 36 },
-  back: { color: "#E53935", fontSize: 14, fontWeight: "700", marginBottom: 18 },
-  eyebrow: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
-  title: { color: "#FFF", fontSize: 28, fontWeight: "900", marginTop: 4 },
-  subtitle: { color: "#A6A8AE", fontSize: 12, marginTop: 4, marginBottom: 16 },
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { ...screenContent },
+  back: { color: colors.primary, fontSize: 14, fontWeight: "700", marginBottom: 18 },
+  eyebrow: { color: colors.primary, fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
+  title: { letterSpacing: -1, color: colors.text, fontSize: 34, fontWeight: "900", marginTop: 4 },
+  subtitle: { color: colors.textMuted, fontSize: 12, marginTop: 4, marginBottom: 16 },
 
   warningCard: {
     flexDirection: "row",
@@ -288,29 +289,26 @@ const styles = StyleSheet.create({
   },
   warningIcon: { fontSize: 20, marginRight: 10 },
   warningCopy: { flex: 1 },
-  warningTitle: { color: "#F1C46A", fontSize: 12, fontWeight: "800" },
+  warningTitle: { color: colors.warning, fontSize: 12, fontWeight: "800" },
   warningText: { color: "#E2C98E", fontSize: 11, marginTop: 2, lineHeight: 15 },
 
   groupCard: {
-    backgroundColor: "#17181D",
-    borderRadius: 16,
+    ...ui.card,
     padding: 16,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
     marginBottom: 14,
   },
   groupHeader: { marginBottom: 12 },
   groupHeaderTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   groupBadge: {
-    backgroundColor: "#E53935",
+    backgroundColor: colors.primaryPressed,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
   },
-  groupBadgeB: { backgroundColor: "#1E88E5" },
-  groupBadgeText: { color: "#FFF", fontSize: 11, fontWeight: "900", letterSpacing: 0.8 },
-  courtBadgeText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800" },
-  groupSubtitle: { color: "#70737C", fontSize: 10, marginTop: 4 },
+  groupBadgeB: { backgroundColor: colors.groupB },
+  groupBadgeText: { color: colors.text, fontSize: 11, fontWeight: "900", letterSpacing: 0.8 },
+  courtBadgeText: { color: colors.text, fontSize: 12, fontWeight: "800" },
+  groupSubtitle: { color: colors.textSubtle, fontSize: 10, marginTop: 4 },
 
   slotsGrid: { gap: 6, marginBottom: 10 },
   slotBox: {
@@ -321,74 +319,71 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   slotBoxFilled: {
-    backgroundColor: "#1C1E23",
+    backgroundColor: colors.surfaceRaised,
     borderWidth: 1,
-    borderColor: "#30323A",
+    borderColor: colors.border,
   },
   slotBoxEmpty: {
-    backgroundColor: "#141519",
+    backgroundColor: colors.input,
     borderWidth: 1,
     borderStyle: "dashed",
-    borderColor: "#2B2D35",
+    borderColor: colors.border,
   },
   slotNumber: {
-    color: "#70737C",
+    color: colors.textSubtle,
     fontSize: 11,
     fontWeight: "900",
     width: 20,
   },
-  slotTeamName: { color: "#FFFFFF", fontSize: 13, fontWeight: "800", flex: 1 },
-  slotPlaceholderText: { color: "#70737C", fontSize: 11, fontStyle: "italic", flex: 1 },
+  slotTeamName: { color: colors.text, fontSize: 13, fontWeight: "800", flex: 1 },
+  slotPlaceholderText: { color: colors.textSubtle, fontSize: 11, fontStyle: "italic", flex: 1 },
 
   groupProgressRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  groupProgressText: { color: "#A6A8AE", fontSize: 11, fontWeight: "700" },
-  groupCompleteText: { color: "#55C77A", fontSize: 11, fontWeight: "800" },
+  groupProgressText: { color: colors.textMuted, fontSize: 11, fontWeight: "700" },
+  groupCompleteText: { color: colors.success, fontSize: 11, fontWeight: "800" },
 
   assignmentSection: { marginTop: 10, marginBottom: 14 },
-  sectionTitle: { color: "#FFFFFF", fontSize: 15, fontWeight: "800" },
-  sectionSubtitle: { color: "#70737C", fontSize: 11, marginTop: 2, marginBottom: 10 },
+  sectionTitle: { color: colors.text, fontSize: 15, fontWeight: "800" },
+  sectionSubtitle: { color: colors.textSubtle, fontSize: 11, marginTop: 2, marginBottom: 10 },
 
   emptyTeamsCard: {
-    backgroundColor: "#17181D",
-    borderRadius: 12,
+    ...ui.card,
     padding: 16,
     alignItems: "center",
   },
-  emptyTeamsText: { color: "#70737C", fontSize: 12, textAlign: "center" },
+  emptyTeamsText: { color: colors.textSubtle, fontSize: 12, textAlign: "center" },
 
   teamRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "#1C1E23",
+    backgroundColor: colors.surfaceRaised,
     borderRadius: 12,
     padding: 10,
     marginBottom: 6,
     borderWidth: 1,
-    borderColor: "#2B2D35",
+    borderColor: colors.border,
   },
-  teamNameText: { color: "#FFF", fontSize: 13, fontWeight: "800", flex: 1, marginRight: 8 },
+  teamNameText: { color: colors.text, fontSize: 13, fontWeight: "800", flex: 1, marginRight: 8 },
   actionButtons: { flexDirection: "row", gap: 6 },
   assignPill: {
+    ...ui.button,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: "#2B2D35",
+    backgroundColor: colors.border,
   },
-  assignPillSelectedA: { backgroundColor: "#E53935" },
-  assignPillSelectedB: { backgroundColor: "#1E88E5" },
-  assignPillText: { color: "#A6A8AE", fontSize: 11, fontWeight: "800" },
-  assignPillTextSelected: { color: "#FFFFFF" },
+  assignPillSelectedA: { backgroundColor: colors.primaryPressed },
+  assignPillSelectedB: { backgroundColor: colors.groupB },
+  assignPillText: { color: colors.textMuted, fontSize: 11, fontWeight: "800" },
+  assignPillTextSelected: { color: colors.text },
 
-  feedbackMessage: { color: "#F1C46A", fontSize: 12, textAlign: "center", marginBottom: 10 },
+  feedbackMessage: { color: colors.warning, fontSize: 12, textAlign: "center", marginBottom: 10 },
 
   generateButton: {
-    backgroundColor: "#E53935",
-    borderRadius: 14,
+    ...ui.button, backgroundColor: colors.primaryPressed,
     padding: 16,
-    alignItems: "center",
     marginTop: 6,
   },
-  disabledButton: { opacity: 0.38, backgroundColor: "#30323A" },
-  generateButtonText: { color: "#FFF", fontSize: 13, fontWeight: "900" },
+  disabledButton: { opacity: 0.38, backgroundColor: colors.border },
+  generateButtonText: { color: colors.text, fontSize: 13, fontWeight: "900" },
 });

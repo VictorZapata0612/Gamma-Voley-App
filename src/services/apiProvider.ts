@@ -146,8 +146,36 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
     );
   }
 
+  private async ensureInitialMatchSets(matchId: string): Promise<void> {
+    const { error } = await supabase.from("match_sets").upsert(
+      [
+        {
+          match_id: matchId,
+          set_number: 1,
+          home_points: 0,
+          away_points: 0,
+          closed_at: null,
+        },
+        {
+          match_id: matchId,
+          set_number: 2,
+          home_points: 0,
+          away_points: 0,
+          closed_at: null,
+        },
+      ] as never,
+      { onConflict: "match_id,set_number", ignoreDuplicates: true },
+    );
+    throwIfError(error);
+  }
+
   private async ensureMatchExists(matchId: string): Promise<void> {
     const id = requiredString(matchId, "matchId");
+    // Scoring RPCs own live status/current_set; never overwrite them from a stale local row.
+    if (await this.remoteRowExists("matches", id)) {
+      await this.ensureInitialMatchSets(id);
+      return;
+    }
 
     if (this.db) {
       const match = await this.db.getFirstAsync<JsonRecord>(
@@ -176,11 +204,10 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
           created_at: match.created_at,
           updated_at: match.updated_at,
         });
+        await this.ensureInitialMatchSets(id);
         return;
       }
     }
-
-    if (await this.remoteRowExists("matches", id)) return;
 
     throw new Error(
       `No existe el partido ${id} en la base local ni en Supabase.`,
@@ -235,6 +262,7 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
       created_at: payload.createdAt ?? payload.created_at,
       updated_at: payload.updatedAt ?? payload.updated_at,
     });
+    await this.ensureInitialMatchSets(id);
   }
 
   private async saveScoreEvent(
@@ -762,6 +790,8 @@ export class SupabaseSyncProvider implements RemoteSyncProvider {
 
         if (!remoteMatchExists) {
           await this.ensureMatchExists(matchId);
+        } else {
+          await this.ensureInitialMatchSets(matchId);
         }
         const lineup = payload.lineup;
         if (!Array.isArray(lineup) || lineup.length !== 6)

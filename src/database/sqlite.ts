@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from "expo-sqlite";
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 export const DEFAULT_TOURNAMENT_ID = "gamma-voley-2026";
 
 const transactionQueues = new WeakMap<SQLiteDatabase, Promise<void>>();
@@ -343,6 +343,18 @@ const INITIAL_SCHEMA = `
 
 `;
 
+const PRACTICE_MATCH_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS practice_matches (
+    id INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('draft', 'active', 'finished')),
+    revision INTEGER NOT NULL DEFAULT 0,
+    setup_json TEXT NOT NULL,
+    format_json TEXT,
+    points_json TEXT NOT NULL DEFAULT '[]'
+  );
+`;
+
 export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
   await db.execAsync("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   const versionRow = await db.getFirstAsync<{ user_version: number }>(
@@ -353,7 +365,7 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
     // Future schema versions may add tables or indexes without breaking this app.
     // Ensure the structures required by this version exist, but never downgrade
     // the database version or run migrations intended for older schemas.
-    await db.execAsync(INITIAL_SCHEMA);
+    await db.execAsync(INITIAL_SCHEMA + PRACTICE_MATCH_SCHEMA);
     return;
   }
   if (currentVersion === SCHEMA_VERSION) return;
@@ -572,6 +584,9 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
           UNIQUE (tournament_id, group_id)
         );
       `);
+    }
+    if (currentVersion < 10) {
+      await db.execAsync(PRACTICE_MATCH_SCHEMA);
     }
     await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   });

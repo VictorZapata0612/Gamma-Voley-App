@@ -1,4 +1,5 @@
 import type { SQLiteDatabase } from "expo-sqlite";
+import { resetMatchLocallyForReplay } from "@/database/repositories";
 
 export type SyncQueueItem = {
   operationId: string;
@@ -630,8 +631,8 @@ export async function retryFailedSyncOperations(
          last_error = NULL,
          updated_at = ?
      WHERE status = 'error'
-       AND entity_type = 'match_set'
-       AND operation = 'save_set'`,
+       AND ((entity_type = 'match_set' AND operation = 'save_set')
+         OR (entity_type = 'rotation_event' AND operation = 'save_rotation'))`,
     now,
   );
 

@@ -50,15 +50,19 @@ function throwIfError(error: { message: string } | null): void {
 
 async function fetchRows(
   table: string,
-  filter?: { column: string; values: string[] } | { column: string; value: string },
+  filter?:
+    | { column: string; values: string[] }
+    | { column: string; value: string },
 ): Promise<RemoteRow[]> {
   let query = supabase.from(table).select("*");
+
   if (filter && "values" in filter) {
     if (filter.values.length === 0) return [];
     query = query.in(filter.column, filter.values);
   } else if (filter) {
     query = query.eq(filter.column, filter.value);
   }
+
   const { data, error } = await query;
   throwIfError(error);
   return (data ?? []) as RemoteRow[];
@@ -70,20 +74,31 @@ async function hydrateDefaultTournamentOnce(
   const localData = await db.getFirstAsync<{
     teams: number;
     groupMatches: number;
+    players: number;
   }>(
     `SELECT
-       (SELECT COUNT(*) FROM teams WHERE tournament_id = ?) AS teams,
-       (SELECT COUNT(*) FROM matches
-        WHERE tournament_id = ? AND phase = 'group') AS groupMatches`,
+       (SELECT COUNT(*)
+        FROM teams
+        WHERE tournament_id = ?) AS teams,
+       (SELECT COUNT(*)
+        FROM matches
+        WHERE tournament_id = ? AND phase = 'group') AS groupMatches,
+       (SELECT COUNT(*)
+        FROM players p
+        JOIN teams t ON t.id = p.team_id
+        WHERE t.tournament_id = ?) AS players`,
+    DEFAULT_TOURNAMENT_ID,
     DEFAULT_TOURNAMENT_ID,
     DEFAULT_TOURNAMENT_ID,
   );
 
   const expectedGroupMatches = GROUP_SIZE * (GROUP_SIZE - 1);
 
+  // No se omite la hidratación si todavía no hay jugadores locales.
   if (
     (localData?.teams ?? 0) >= TOURNAMENT_TEAM_COUNT &&
-    (localData?.groupMatches ?? 0) >= expectedGroupMatches
+    (localData?.groupMatches ?? 0) >= expectedGroupMatches &&
+    (localData?.players ?? 0) > 0
   ) {
     return {
       hydrated: false,
@@ -187,7 +202,8 @@ async function hydrateDefaultTournamentOnce(
 
     for (const group of groups) {
       await db.runAsync(
-        "INSERT OR IGNORE INTO groups (id, tournament_id, name) VALUES (?, ?, ?)",
+        `INSERT OR IGNORE INTO groups (id, tournament_id, name)
+         VALUES (?, ?, ?)`,
         requiredString(group.id, "groups.id"),
         requiredString(group.tournament_id, "groups.tournament_id"),
         requiredString(group.name, "groups.name"),
@@ -228,7 +244,8 @@ async function hydrateDefaultTournamentOnce(
 
     for (const membership of memberships) {
       await db.runAsync(
-        "INSERT OR IGNORE INTO group_memberships (group_id, team_id) VALUES (?, ?)",
+        `INSERT OR IGNORE INTO group_memberships (group_id, team_id)
+         VALUES (?, ?)`,
         requiredString(membership.group_id, "group_memberships.group_id"),
         requiredString(membership.team_id, "group_memberships.team_id"),
       );
@@ -273,13 +290,31 @@ async function hydrateDefaultTournamentOnce(
            created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         requiredString(resolution.id, "qualification_resolutions.id"),
-        requiredString(resolution.tournament_id, "qualification_resolutions.tournament_id"),
-        requiredString(resolution.group_id, "qualification_resolutions.group_id"),
+        requiredString(
+          resolution.tournament_id,
+          "qualification_resolutions.tournament_id",
+        ),
+        requiredString(
+          resolution.group_id,
+          "qualification_resolutions.group_id",
+        ),
         JSON.stringify(resolution.affected_team_ids),
-        requiredString(resolution.qualified_team_id, "qualification_resolutions.qualified_team_id"),
-        requiredString(resolution.criterion, "qualification_resolutions.criterion"),
-        requiredString(resolution.decided_by, "qualification_resolutions.decided_by"),
-        requiredString(resolution.decided_at, "qualification_resolutions.decided_at"),
+        requiredString(
+          resolution.qualified_team_id,
+          "qualification_resolutions.qualified_team_id",
+        ),
+        requiredString(
+          resolution.criterion,
+          "qualification_resolutions.criterion",
+        ),
+        requiredString(
+          resolution.decided_by,
+          "qualification_resolutions.decided_by",
+        ),
+        requiredString(
+          resolution.decided_at,
+          "qualification_resolutions.decided_at",
+        ),
         nullableString(resolution.created_at) ?? now,
         nullableString(resolution.updated_at) ?? now,
       );

@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from "expo-sqlite";
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 14;
 export const DEFAULT_TOURNAMENT_ID = "gamma-voley-2026";
 
 const transactionQueues = new WeakMap<SQLiteDatabase, Promise<void>>();
@@ -343,6 +343,15 @@ const INITIAL_SCHEMA = `
 
 `;
 
+const PRACTICE_FAVORITES_SCHEMA = `CREATE TABLE IF NOT EXISTS practice_formats (
+  name TEXT PRIMARY KEY COLLATE NOCASE, setup_json TEXT NOT NULL
+);`;
+
+const PRACTICE_ROSTER_SCHEMA = `CREATE TABLE IF NOT EXISTS practice_roster (
+  id INTEGER PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, details TEXT NOT NULL,
+  UNIQUE(kind, name COLLATE NOCASE)
+);`;
+
 const PRACTICE_MATCH_SCHEMA = `
   CREATE TABLE IF NOT EXISTS practice_matches (
     id INTEGER PRIMARY KEY,
@@ -365,10 +374,14 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
     // Future schema versions may add tables or indexes without breaking this app.
     // Ensure the structures required by this version exist, but never downgrade
     // the database version or run migrations intended for older schemas.
-    await db.execAsync(INITIAL_SCHEMA + PRACTICE_MATCH_SCHEMA);
+    await db.execAsync(INITIAL_SCHEMA + PRACTICE_MATCH_SCHEMA + PRACTICE_FAVORITES_SCHEMA + PRACTICE_ROSTER_SCHEMA);
     return;
   }
   if (currentVersion === SCHEMA_VERSION) return;
+  if (currentVersion >= 12) {
+    const { savePreMigrationPracticeBackup } = await import("./practiceSnapshots");
+    await savePreMigrationPracticeBackup(db);
+  }
 
   await withDatabaseTransaction(db, async () => {
     if (currentVersion < 1) {
@@ -588,6 +601,13 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
     if (currentVersion < 10) {
       await db.execAsync(PRACTICE_MATCH_SCHEMA);
     }
+    if (currentVersion < 11) {
+      await db.execAsync("ALTER TABLE practice_matches ADD COLUMN state_json TEXT");
+      await db.execAsync(PRACTICE_FAVORITES_SCHEMA);
+    }
+    if (currentVersion < 12) await db.execAsync(PRACTICE_ROSTER_SCHEMA);
+    if (currentVersion < 13) await db.execAsync("ALTER TABLE practice_matches ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;");
+    if (currentVersion < 14) await db.execAsync("ALTER TABLE practice_matches ADD COLUMN trashed INTEGER NOT NULL DEFAULT 0;");
     await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   });
 }

@@ -1,6 +1,8 @@
 export type PracticeMode = "friendly" | "practice";
 export type PracticeSide = "home" | "away";
 
+export type PracticePhoto = { name: string; mime: "image/jpeg" | "image/png" | "image/webp"; base64: string; bytes: number };
+
 export type PracticeDraft = {
   mode: PracticeMode;
   home: string;
@@ -9,6 +11,16 @@ export type PracticeDraft = {
   target: string;
   lead: 1 | 2;
   cap: string;
+  photos?: PracticePhoto[];
+  objective?: string;
+  objectiveStatus?: "achieved" | "partial" | "missed";
+  objectiveNotes?: string;
+  detailedCapture?: boolean;
+  fixedSets?: boolean;
+  finalTarget?: string;
+  initialHome?: string;
+  initialAway?: string;
+  minutes?: string;
 };
 
 export const initialPracticeDraft: PracticeDraft = {
@@ -26,6 +38,10 @@ export type PracticeFormat = {
   target: number;
   lead: PracticeDraft["lead"];
   cap: number | null;
+  fixedSets?: boolean;
+  finalTarget?: number;
+  initial?: { home: number; away: number };
+  seconds?: number;
 };
 
 export type PracticePoint = { side: PracticeSide; at: string };
@@ -45,7 +61,18 @@ export function validatePracticeDraft(draft: PracticeDraft): PracticeFormat {
   if (cap !== null && (!Number.isInteger(cap) || cap < target || cap > 99)) {
     throw new Error("El tope debe estar entre el objetivo y 99.");
   }
-  return { bestOf: draft.bestOf, target, lead: draft.lead, cap };
+  const finalTarget = draft.finalTarget?.trim() ? Number(draft.finalTarget) : undefined;
+  const initial = { home: Number(draft.initialHome || 0), away: Number(draft.initialAway || 0) };
+  const minutes = Number(draft.minutes || 0);
+  if (finalTarget !== undefined && (!Number.isInteger(finalTarget) || finalTarget < 1 || finalTarget > (cap ?? 99))) {
+    throw new Error("El objetivo del último set debe ser válido y respetar el tope.");
+  }
+  if (!Number.isInteger(minutes) || minutes < 0 || minutes > 120) throw new Error("Usa entre 1 y 120 minutos, o deja el tiempo vacío.");
+  if (![initial.home, initial.away].every((n) => Number.isInteger(n) && n >= 0 && n < (draft.bestOf === 1 ? finalTarget ?? target : target))) {
+    throw new Error("El marcador inicial debe ser inferior al objetivo.");
+  }
+  return { bestOf: draft.bestOf, target, lead: draft.lead, cap: minutes ? null : cap,
+    fixedSets: draft.fixedSets, finalTarget, initial, seconds: minutes ? minutes * 60 : undefined };
 }
 
 export function readPracticeScore(format: PracticeFormat, points: readonly PracticePoint[]) {

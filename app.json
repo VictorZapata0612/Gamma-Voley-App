@@ -3,7 +3,7 @@
     "name": "Gamma Voley",
     "slug": "gamma-voley",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/gamma-app-icon.png",
     "scheme": "gammavoley",
     "userInterfaceStyle": "automatic",

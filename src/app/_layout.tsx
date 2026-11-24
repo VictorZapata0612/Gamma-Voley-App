@@ -3,6 +3,7 @@ import { SQLiteProvider, useSQLiteContext } from "expo-sqlite";
 import { StatusBar } from "expo-status-bar";
 import { initializeDatabase } from "@/database/sqlite";
 import { useAutoSync } from "@/hooks/useAutoSync";
+import { colors } from "@/ui/theme";
 
 function AppContent() {
   const db = useSQLiteContext();
@@ -13,7 +14,7 @@ function AppContent() {
   return (
     <>
       <StatusBar style="light" />
-      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#101114" } }} />
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }} />
     </>
   );
 }

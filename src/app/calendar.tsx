@@ -1,6 +1,8 @@
+import { colors, screenContent, ui } from "@/ui/theme";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import {
@@ -292,62 +294,58 @@ export default function CalendarScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#101114" },
-  container: { flexGrow: 1, padding: 18, paddingTop: 20, paddingBottom: 36 },
-  back: { color: "#E53935", fontSize: 14, fontWeight: "700", marginBottom: 18 },
-  eyebrow: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
-  title: { color: "#FFF", fontSize: 28, fontWeight: "900", marginTop: 4 },
-  subtitle: { color: "#A6A8AE", fontSize: 12, marginTop: 4, marginBottom: 16 },
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { ...screenContent },
+  back: { color: colors.primary, fontSize: 14, fontWeight: "700", marginBottom: 18 },
+  eyebrow: { color: colors.primary, fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
+  title: { letterSpacing: -1, color: colors.text, fontSize: 34, fontWeight: "900", marginTop: 4 },
+  subtitle: { color: colors.textMuted, fontSize: 12, marginTop: 4, marginBottom: 16 },
 
   summaryRow: { flexDirection: "row", gap: 8, marginBottom: 14 },
   summaryBadge: {
     flex: 1,
-    backgroundColor: "#17181D",
+    backgroundColor: colors.surface,
     borderRadius: 12,
     padding: 10,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#2B2D35",
+    borderColor: colors.border,
   },
   summaryLive: { borderColor: "#4CAF50", backgroundColor: "#162B1F" },
-  summaryNumber: { color: "#FFFFFF", fontSize: 18, fontWeight: "900" },
-  summaryLiveText: { color: "#55C77A" },
-  summaryLabel: { color: "#70737C", fontSize: 10, fontWeight: "700", marginTop: 2 },
+  summaryNumber: { color: colors.text, fontSize: 18, fontWeight: "900" },
+  summaryLiveText: { color: colors.success },
+  summaryLabel: { color: colors.textSubtle, fontSize: 10, fontWeight: "700", marginTop: 2 },
 
   filterRow: { flexDirection: "row", gap: 6, marginBottom: 16 },
   filterPill: {
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: 8,
-    backgroundColor: "#1C1E23",
+    backgroundColor: colors.surfaceRaised,
     borderWidth: 1,
-    borderColor: "#2B2D35",
+    borderColor: colors.border,
   },
-  filterPillActive: { backgroundColor: "#30323A", borderColor: "#454751" },
-  filterPillActiveA: { backgroundColor: "#E53935", borderColor: "#E53935" },
-  filterPillActiveB: { backgroundColor: "#1E88E5", borderColor: "#1E88E5" },
+  filterPillActive: { backgroundColor: colors.border, borderColor: colors.borderStrong },
+  filterPillActiveA: { backgroundColor: colors.primaryPressed, borderColor: colors.primary },
+  filterPillActiveB: { backgroundColor: colors.groupB, borderColor: colors.groupB },
   filterPillActiveFinal: { backgroundColor: "#D84315", borderColor: "#FF5722" },
-  filterText: { color: "#A6A8AE", fontSize: 11, fontWeight: "800" },
-  filterTextActive: { color: "#FFFFFF" },
+  filterText: { color: colors.textMuted, fontSize: 11, fontWeight: "800" },
+  filterTextActive: { color: colors.text },
 
   phaseSection: { marginBottom: 18 },
-  phaseHeaderTitle: { color: "#FFFFFF", fontSize: 15, fontWeight: "800", marginBottom: 10 },
+  phaseHeaderTitle: { color: colors.text, fontSize: 15, fontWeight: "800", marginBottom: 10 },
 
   emptyCard: {
-    backgroundColor: "#17181D",
-    borderRadius: 16,
+    ...ui.card,
     padding: 16,
     alignItems: "center",
   },
-  emptyTitle: { color: "#70737C", fontSize: 12, fontStyle: "italic" },
+  emptyTitle: { color: colors.textSubtle, fontSize: 12, fontStyle: "italic" },
 
   matchCard: {
-    backgroundColor: "#1C1E23",
-    borderRadius: 16,
+    ...ui.card,
     padding: 14,
     marginBottom: 10,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
   },
   matchCardKnockout: {
     borderColor: "#D84315",
@@ -366,17 +364,17 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 4,
   },
-  knockoutPillText: { color: "#FFF", fontSize: 9, fontWeight: "900", letterSpacing: 0.5 },
+  knockoutPillText: { color: colors.text, fontSize: 9, fontWeight: "900", letterSpacing: 0.5 },
 
   groupPill: {
-    backgroundColor: "#E53935",
+    backgroundColor: colors.primaryPressed,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
   },
-  groupPillB: { backgroundColor: "#1E88E5" },
-  groupPillText: { color: "#FFF", fontSize: 9, fontWeight: "900", letterSpacing: 0.5 },
-  courtNameText: { color: "#A6A8AE", fontSize: 11, fontWeight: "700" },
+  groupPillB: { backgroundColor: colors.groupB },
+  groupPillText: { color: colors.text, fontSize: 9, fontWeight: "900", letterSpacing: 0.5 },
+  courtNameText: { color: colors.textMuted, fontSize: 11, fontWeight: "700" },
 
   statusPill: {
     flexDirection: "row",
@@ -387,32 +385,32 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   statusLive: { backgroundColor: "#1B3B26" },
-  statusCompleted: { backgroundColor: "#2B2D35" },
+  statusCompleted: { backgroundColor: colors.border },
   statusScheduled: { backgroundColor: "#2B2215" },
-  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#55C77A" },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.success },
   statusPillText: { fontSize: 9, fontWeight: "900", letterSpacing: 0.5 },
-  statusLiveText: { color: "#55C77A" },
-  statusCompletedText: { color: "#A6A8AE" },
-  statusScheduledText: { color: "#F1C46A" },
+  statusLiveText: { color: colors.success },
+  statusCompletedText: { color: colors.textMuted },
+  statusScheduledText: { color: colors.warning },
 
   matchupBody: { flexDirection: "row", alignItems: "center", marginVertical: 6 },
   teamCol: { flex: 1, alignItems: "center" },
-  teamNameText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800", textAlign: "center" },
-  winnerText: { color: "#55C77A" },
+  teamNameText: { color: colors.text, fontSize: 13, fontWeight: "800", textAlign: "center" },
+  winnerText: { color: colors.success },
   vsBox: { width: 44, alignItems: "center" },
-  vsText: { color: "#70737C", fontSize: 11, fontWeight: "900" },
-  matchIndexText: { color: "#454751", fontSize: 9, fontWeight: "700", marginTop: 2 },
+  vsText: { color: colors.textSubtle, fontSize: 11, fontWeight: "900" },
+  matchIndexText: { color: colors.borderStrong, fontSize: 9, fontWeight: "700", marginTop: 2 },
 
   matchFooter: {
     marginTop: 10,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: "#2B2D35",
+    borderTopColor: colors.border,
     alignItems: "center",
   },
-  actionLabel: { color: "#A6A8AE", fontSize: 11, fontWeight: "700" },
+  actionLabel: { color: colors.textMuted, fontSize: 11, fontWeight: "700" },
   actionLabelLive: { color: "#81C784", fontWeight: "800" },
 
-  errorText: { color: "#FF8D8D", fontSize: 12, marginBottom: 10, textAlign: "center" },
+  errorText: { color: colors.dangerText, fontSize: 12, marginBottom: 10, textAlign: "center" },
   pressed: { opacity: 0.72 },
 });

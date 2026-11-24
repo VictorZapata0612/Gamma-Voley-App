@@ -42,8 +42,8 @@ export function isSetClosed(
     return high >= GROUP_SET_TARGET;
   }
 
-  // Group phase set 3 is the prolongation: stored from 0-0, displayed from 15-15.
-  // It closes with a 2-point lead or when a team reaches 21 (20-20 -> 21).
+  // The group tie-break is set 2 prolongation: stored from 0-0, displayed from 15-15.
+  // It seeks a 2-point lead, but 21 is an absolute cap, so 21-20 closes it.
   return high - low >= 2 || high >= GROUP_PROLONGATION_TARGET - PROLONGATION_BASE;
 }
 

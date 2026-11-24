@@ -1,6 +1,9 @@
+import { ClubDialog, useClubDialog } from "@/ui/ClubDialog";
+import { colors, screenContent, ui } from "@/ui/theme";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useState } from "react";
-import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useSQLiteContext } from "expo-sqlite";
 import {
   deleteTeam,
@@ -12,6 +15,8 @@ import {
   type TeamRecord,
 } from "@/database/repositories";
 import { goBack } from "@/utils/navigation";
+import { MAX_TEAM_PLAYERS } from "@/domain/registration";
+import { hydrateDefaultTournament } from "@/services/initialHydration";
 
 const NEXT_ELIGIBILITY: Record<PlayerRecord["eligibility"], PlayerRecord["eligibility"]> = {
   pending_review: "eligible",
@@ -20,6 +25,7 @@ const NEXT_ELIGIBILITY: Record<PlayerRecord["eligibility"], PlayerRecord["eligib
 };
 
 export default function TeamDetailScreen() {
+  const dialog = useClubDialog();
   const db = useSQLiteContext();
   const { id } = useLocalSearchParams<{ id: string | string[] }>();
   const teamId = Array.isArray(id) ? id[0] : id;
@@ -28,29 +34,52 @@ export default function TeamDetailScreen() {
   const [players, setPlayers] = useState<PlayerRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const isPlayerLimitReached = players.length >= MAX_TEAM_PLAYERS;
 
-  const load = useCallback(async () => {
-    if (!teamId) {
-      setError("No se recibió el identificador del equipo.");
-      setLoading(false);
+const load = useCallback(async () => {
+  if (!teamId) {
+    setError("No se recibió el identificador del equipo.");
+    setLoading(false);
+    return;
+  }
+
+  try {
+    let hydrationError: unknown = null;
+
+    try {
+      await hydrateDefaultTournament(db);
+    } catch (reason) {
+      // Si no hay conexión, intenta mostrar los datos que ya existan en SQLite.
+      hydrationError = reason;
+    }
+
+    const loadedTeam = await getTeamRecord(db, teamId);
+
+    if (!loadedTeam) {
+      setError("El equipo no existe en este dispositivo.");
       return;
     }
-    try {
-      const loadedTeam = await getTeamRecord(db, teamId);
-      if (!loadedTeam) {
-        setError("El equipo no existe en este dispositivo.");
-        setLoading(false);
-        return;
-      }
-      setTeam(loadedTeam);
-      setPlayers(await listPlayers(db, teamId));
+
+    const loadedPlayers = await listPlayers(db, teamId);
+
+    setTeam(loadedTeam);
+    setPlayers(loadedPlayers);
+
+    if (loadedPlayers.length === 0 && hydrationError instanceof Error) {
+      setError(`No se pudo descargar la nómina: ${hydrationError.message}`);
+    } else {
       setError(null);
-    } catch {
-      setError("No se pudo cargar el equipo.");
-    } finally {
-      setLoading(false);
     }
-  }, [db, teamId]);
+  } catch (reason) {
+    setError(
+      reason instanceof Error
+        ? reason.message
+        : "No se pudo cargar el equipo.",
+    );
+  } finally {
+    setLoading(false);
+  }
+}, [db, teamId]);
 
   async function changeTeamStatus(changes: Parameters<typeof updateTeamStatus>[2]) {
     if (!teamId) return;
@@ -79,9 +108,10 @@ export default function TeamDetailScreen() {
   );
 
   // Status changes go through the audited repository update
-  async function togglePaymentStatus() {
+  async function togglePaymentStatus(concept: "initial" | "balance") {
     if (!team) return;
-    await changeTeamStatus({ paymentStatus: team.paymentStatus === "paid" ? "pending" : "paid" });
+    const key = concept === "initial" ? "initialPaymentStatus" : "balancePaymentStatus";
+    await changeTeamStatus({ [key]: team[key] === "paid" ? "pending" : "paid" });
   }
 
   async function toggleRegistrationStatus() {
@@ -163,23 +193,41 @@ export default function TeamDetailScreen() {
           {/* Estado de Pago e Inscripción Interactivo */}
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
-              <Text style={styles.metaLabel}>Cuota Inscripción ($150.000 COP)</Text>
+              <Text style={styles.metaLabel}>Abono inicial ($75.000 COP · no reembolsable)</Text>
               <Pressable
-                onPress={() => void togglePaymentStatus()}
+                onPress={() => void togglePaymentStatus("initial")}
                 style={({ pressed }) => [
                   styles.statusBadge,
-                  team.paymentStatus === "paid" ? styles.badgePaid : styles.badgePending,
+                  team.initialPaymentStatus === "paid" ? styles.badgePaid : styles.badgePending,
                   pressed && styles.pressed,
                 ]}
               >
                 <Text style={styles.statusBadgeText}>
-                  {team.paymentStatus === "paid" ? "✓ Pagado ($150.000)" : "⏳ Pendiente de pago (Toca para marcar pagado)"}
+                  {team.initialPaymentStatus === "paid" ? "✓ Pagado el " + (team.initialPaymentPaidAt ? new Date(team.initialPaymentPaidAt).toLocaleDateString() : "") : "⏳ Pendiente (toca para registrar)"}
                 </Text>
               </Pressable>
             </View>
           </View>
 
           <View style={{ height: 10 }} />
+
+          <View style={styles.metaRow}>
+            <View style={styles.metaItem}>
+              <Text style={styles.metaLabel}>Saldo ($75.000 COP)</Text>
+              <Pressable
+                onPress={() => void togglePaymentStatus("balance")}
+                style={({ pressed }) => [
+                  styles.statusBadge,
+                  team.balancePaymentStatus === "paid" ? styles.badgePaid : styles.badgePending,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.statusBadgeText}>
+                  {team.balancePaymentStatus === "paid" ? "✓ Pagado el " + (team.balancePaymentPaidAt ? new Date(team.balancePaymentPaidAt).toLocaleDateString() : "") : "⚠ Debe pagarse antes del primer partido"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
 
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
@@ -249,14 +297,15 @@ export default function TeamDetailScreen() {
           <View>
             <Text style={styles.sectionTitle}>Nómina de Jugadores</Text>
             <Text style={styles.sectionSub}>
-              {eligibleCount} elegibles · {pendingReviewCount} pendientes de revisión
+              {players.length}/{MAX_TEAM_PLAYERS} jugadores · {eligibleCount} elegibles · {pendingReviewCount} pendientes de revisión
             </Text>
           </View>
           <Pressable
+            disabled={isPlayerLimitReached}
             onPress={() => router.push({ pathname: "/player-form", params: { teamId: team.id } })}
-            style={styles.addButton}
+            style={[styles.addButton, isPlayerLimitReached && styles.disabledButton]}
           >
-            <Text style={styles.addButtonText}>+ Inscribir</Text>
+            <Text style={styles.addButtonText}>{isPlayerLimitReached ? "Cupo completo" : "+ Inscribir"}</Text>
           </Pressable>
         </View>
 
@@ -322,7 +371,7 @@ export default function TeamDetailScreen() {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={`Editar a ${player.name}`}
-                  onPress={() => router.push({ pathname: "/player-form", params: { teamId: team.id, id: player.id } })}
+                  onPress={() => router.push({ pathname: "/player-form", params: { teamId: team.id, playerId: player.id } })}
                   style={styles.editPlayer}
                 >
                   <Text style={styles.editPlayerText}>Editar</Text>
@@ -342,7 +391,7 @@ export default function TeamDetailScreen() {
 
         <Pressable
           onPress={() =>
-            Alert.alert(
+            dialog.open(
               "Eliminar equipo",
               `¿Estás seguro de eliminar a ${team.name} y sus jugadores? Esta acción no se puede deshacer.`,
               [
@@ -358,44 +407,42 @@ export default function TeamDetailScreen() {
 
         {error && <Text style={styles.errorText}>{error}</Text>}
       </ScrollView>
+    <ClubDialog prompt={dialog.prompt} close={dialog.close} />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#101114" },
-  container: { flexGrow: 1, padding: 18, paddingTop: 20, paddingBottom: 36 },
-  loading: { color: "#FFF", padding: 24, fontSize: 16 },
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { ...screenContent },
+  loading: { color: colors.text, padding: 24, fontSize: 16 },
   errorState: { padding: 24, gap: 16 },
-  back: { color: "#E53935", fontSize: 14, fontWeight: "700", marginBottom: 18 },
+  back: { color: colors.primary, fontSize: 14, fontWeight: "700", marginBottom: 18 },
 
   headerRow: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
   teamAvatar: {
     width: 52,
     height: 52,
     borderRadius: 16,
-    backgroundColor: "#E53935",
+    backgroundColor: colors.primaryPressed,
     alignItems: "center",
     justifyContent: "center",
   },
-  avatarText: { color: "#FFF", fontSize: 24, fontWeight: "900" },
+  avatarText: { color: colors.text, fontSize: 24, fontWeight: "900" },
   headerCopy: { marginLeft: 14, flex: 1 },
-  eyebrow: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
-  title: { color: "#FFF", fontSize: 26, fontWeight: "900", marginTop: 2 },
+  eyebrow: { color: colors.primary, fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
+  title: { letterSpacing: -1, color: colors.text, fontSize: 34, fontWeight: "900", marginTop: 2 },
 
   metaCard: {
-    backgroundColor: "#17181D",
-    borderRadius: 16,
+    ...ui.card,
     padding: 16,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
     marginBottom: 14,
   },
   metaRow: { flexDirection: "row", justifyContent: "space-between" },
   metaItem: { flex: 1 },
-  metaLabel: { color: "#70737C", fontSize: 10, fontWeight: "800", textTransform: "uppercase" },
-  metaValue: { color: "#FFFFFF", fontSize: 13, fontWeight: "800", marginTop: 4 },
-  divider: { height: 1, backgroundColor: "#2B2D35", marginVertical: 12 },
+  metaLabel: { color: colors.textSubtle, fontSize: 10, fontWeight: "800", textTransform: "uppercase" },
+  metaValue: { color: colors.text, fontSize: 13, fontWeight: "800", marginTop: 4 },
+  divider: { height: 1, backgroundColor: colors.border, marginVertical: 12 },
 
   statusBadge: {
     alignSelf: "flex-start",
@@ -406,9 +453,9 @@ const styles = StyleSheet.create({
   },
   badgePaid: { backgroundColor: "#162B1F", borderWidth: 1, borderColor: "#4CAF50" },
   badgeConfirmed: { backgroundColor: "#162B1F", borderWidth: 1, borderColor: "#4CAF50" },
-  badgeWithdrawn: { backgroundColor: "#2A181A", borderWidth: 1, borderColor: "#E53935" },
+  badgeWithdrawn: { backgroundColor: "#2A181A", borderWidth: 1, borderColor: colors.primary },
   badgePending: { backgroundColor: "#2B2215", borderWidth: 1, borderColor: "#FFB300" },
-  statusBadgeText: { color: "#FFF", fontSize: 11, fontWeight: "800" },
+  statusBadgeText: { color: colors.text, fontSize: 11, fontWeight: "800" },
 
   ruleCard: {
     borderRadius: 16,
@@ -427,20 +474,20 @@ const styles = StyleSheet.create({
   ruleCardHeader: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
   ruleIcon: { fontSize: 22 },
   ruleHeaderCopy: { marginLeft: 10, flex: 1 },
-  ruleTitle: { color: "#FFFFFF", fontSize: 14, fontWeight: "900" },
-  ruleSubtitle: { color: "#A6A8AE", fontSize: 10, marginTop: 2 },
+  ruleTitle: { color: colors.text, fontSize: 14, fontWeight: "900" },
+  ruleSubtitle: { color: colors.textMuted, fontSize: 10, marginTop: 2 },
 
   compositionRow: { flexDirection: "row", gap: 8, marginBottom: 12 },
   compositionPill: {
     flex: 1,
-    backgroundColor: "#1C1E23",
+    backgroundColor: colors.surfaceRaised,
     borderRadius: 10,
     padding: 10,
     alignItems: "center",
   },
-  compositionNumber: { color: "#FFFFFF", fontSize: 18, fontWeight: "900" },
-  compositionLabel: { color: "#A6A8AE", fontSize: 10, fontWeight: "700", marginTop: 2 },
-  ruleNotice: { color: "#C2C4CA", fontSize: 11, lineHeight: 16 },
+  compositionNumber: { color: colors.text, fontSize: 18, fontWeight: "900" },
+  compositionLabel: { color: colors.textMuted, fontSize: 10, fontWeight: "700", marginTop: 2 },
+  ruleNotice: { color: colors.textMuted, fontSize: 11, lineHeight: 16 },
 
   sectionHeader: {
     flexDirection: "row",
@@ -448,51 +495,47 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 12,
   },
-  sectionTitle: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" },
-  sectionSub: { color: "#70737C", fontSize: 11, marginTop: 2 },
+  sectionTitle: { color: colors.text, fontSize: 16, fontWeight: "800" },
+  sectionSub: { color: colors.textSubtle, fontSize: 11, marginTop: 2 },
   addButton: {
-    backgroundColor: "#E53935",
+    ...ui.button, backgroundColor: colors.primaryPressed,
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 8,
   },
-  addButtonText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
+  disabledButton: { opacity: 0.45, backgroundColor: colors.border },
+  addButtonText: { color: colors.text, fontSize: 12, fontWeight: "800" },
 
   emptyCard: {
-    backgroundColor: "#17181D",
-    borderRadius: 14,
+    ...ui.card,
     padding: 18,
     alignItems: "center",
     marginBottom: 14,
   },
-  emptyTitle: { color: "#FFF", fontSize: 14, fontWeight: "800" },
-  emptyText: { color: "#A6A8AE", fontSize: 11, textAlign: "center", marginTop: 4, lineHeight: 16 },
+  emptyTitle: { color: colors.text, fontSize: 14, fontWeight: "800" },
+  emptyText: { color: colors.textMuted, fontSize: 11, textAlign: "center", marginTop: 4, lineHeight: 16 },
 
   playerCard: {
+    ...ui.card,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#1C1E23",
-    borderRadius: 14,
     padding: 12,
     marginBottom: 8,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
   },
   jerseyCircle: {
     width: 40,
     height: 40,
     borderRadius: 12,
-    backgroundColor: "#2B2D35",
+    backgroundColor: colors.border,
     alignItems: "center",
     justifyContent: "center",
   },
-  jerseyNumber: { color: "#FFFFFF", fontSize: 14, fontWeight: "900" },
+  jerseyNumber: { color: colors.text, fontSize: 14, fontWeight: "900" },
   playerDetails: { marginLeft: 12, flex: 1 },
-  playerName: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
+  playerName: { color: colors.text, fontSize: 14, fontWeight: "800" },
   tagsRow: { flexDirection: "row", gap: 6, marginTop: 4 },
   genderBadge: {
-    backgroundColor: "#2B2D35",
-    color: "#C2C4CA",
+    backgroundColor: colors.border,
+    color: colors.textMuted,
     fontSize: 10,
     fontWeight: "700",
     paddingHorizontal: 6,
@@ -500,7 +543,7 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   editPlayer: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: "#24262C", marginLeft: 8 },
-  editPlayerText: { color: "#FFF", fontSize: 12, fontWeight: "800" },
+  editPlayerText: { color: colors.text, fontSize: 12, fontWeight: "800" },
   eligibilityBadge: {
     paddingHorizontal: 6,
     paddingVertical: 2,
@@ -510,33 +553,31 @@ const styles = StyleSheet.create({
   eligibilityAmber: { backgroundColor: "#2B2215" },
   eligibilityRed: { backgroundColor: "#2B1616" },
   eligibilityText: { fontSize: 10, fontWeight: "800" },
-  eligibilityTextGreen: { color: "#55C77A" },
-  eligibilityTextAmber: { color: "#F1C46A" },
-  eligibilityTextRed: { color: "#FF8D8D" },
+  eligibilityTextGreen: { color: colors.success },
+  eligibilityTextAmber: { color: colors.warning },
+  eligibilityTextRed: { color: colors.dangerText },
 
   secondaryButton: {
+    ...ui.button,
     borderWidth: 1,
-    borderColor: "#454751",
-    borderRadius: 14,
+    borderColor: colors.borderStrong,
     padding: 14,
-    alignItems: "center",
     marginTop: 14,
   },
-  secondaryButtonText: { color: "#FFF", fontWeight: "800", fontSize: 13 },
+  secondaryButtonText: { color: colors.text, fontWeight: "800", fontSize: 13 },
   deleteButton: {
+    ...ui.button,
     padding: 14,
-    alignItems: "center",
     marginTop: 6,
   },
-  deleteButtonText: { color: "#FF8D8D", fontWeight: "800", fontSize: 13 },
-  errorText: { color: "#FF8D8D", marginTop: 10, textAlign: "center", fontSize: 12 },
-  error: { color: "#FF8D8D", fontSize: 14, textAlign: "center" },
+  deleteButtonText: { color: colors.dangerText, fontWeight: "800", fontSize: 13 },
+  errorText: { color: colors.dangerText, marginTop: 10, textAlign: "center", fontSize: 12 },
+  error: { color: colors.dangerText, fontSize: 14, textAlign: "center" },
   secondary: {
-    backgroundColor: "#1C1E23",
+    ...ui.button,
+    backgroundColor: colors.surfaceRaised,
     padding: 14,
-    borderRadius: 12,
-    alignItems: "center",
   },
-  secondaryText: { color: "#FFF", fontWeight: "800" },
+  secondaryText: { color: colors.text, fontWeight: "800" },
   pressed: { opacity: 0.72 },
 });

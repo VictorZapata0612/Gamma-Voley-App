@@ -1,6 +1,7 @@
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useSQLiteContext } from "expo-sqlite";
 import { DEFAULT_TOURNAMENT_ID } from "@/database/sqlite";
 import { goBack } from "@/utils/navigation";
@@ -8,6 +9,7 @@ import { listTeamRecords, type TeamRecord } from "@/database/repositories";
 import { hydrateDefaultTournament } from "@/services/initialHydration";
 import { supabase } from "@/services/supabase";
 import { TOURNAMENT_TEAM_COUNT } from "@/domain/schedule";
+import { colors, screenContent, ui, platformShadow } from "@/ui/theme";
 
 type RemoteTeam = {
   id: string;
@@ -17,12 +19,16 @@ type RemoteTeam = {
   contact: string | null;
   registration_status: TeamRecord["registrationStatus"];
   payment_status: TeamRecord["paymentStatus"];
+  initial_payment_status: TeamRecord["initialPaymentStatus"];
+  balance_payment_status: TeamRecord["balancePaymentStatus"];
+  initial_payment_paid_at: string | null;
+  balance_payment_paid_at: string | null;
 };
 
 async function loadWebTeams(): Promise<TeamRecord[]> {
   const { data, error } = await supabase
     .from("teams")
-    .select("id, tournament_id, name, captain_name, contact, registration_status, payment_status")
+    .select("id, tournament_id, name, captain_name, contact, registration_status, payment_status, initial_payment_status, balance_payment_status, initial_payment_paid_at, balance_payment_paid_at")
     .eq("tournament_id", DEFAULT_TOURNAMENT_ID)
     .order("name");
 
@@ -36,6 +42,10 @@ async function loadWebTeams(): Promise<TeamRecord[]> {
     contact: team.contact,
     registrationStatus: team.registration_status,
     paymentStatus: team.payment_status,
+    initialPaymentStatus: team.initial_payment_status,
+    balancePaymentStatus: team.balance_payment_status,
+    initialPaymentPaidAt: team.initial_payment_paid_at,
+    balancePaymentPaidAt: team.balance_payment_paid_at,
   }));
 }
 
@@ -100,8 +110,12 @@ export default function TeamsScreen() {
           </View>
 
           {/* Barra de progreso de cupos */}
-          <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: `${(teams.length / maxTeams) * 100}%` }]} />
+          <View
+            accessibilityRole="progressbar"
+            accessibilityLabel={`${teams.length} de ${maxTeams} equipos registrados`}
+            style={styles.progressBar}
+          >
+            <View style={[styles.progressFill, { width: `${Math.min(teams.length / maxTeams, 1) * 100}%` }]} />
           </View>
 
           <Text style={styles.quotaHint}>
@@ -111,7 +125,14 @@ export default function TeamsScreen() {
           </Text>
         </View>
 
-        {error && <Text style={styles.errorText}>{error}</Text>}
+        {error && (
+          <View style={styles.errorCard} accessibilityRole="alert">
+            <Text style={styles.errorText}>{error}</Text>
+            <Pressable onPress={() => void load()} style={styles.retryButton} accessibilityRole="button">
+              <Text style={styles.retryButtonText}>Reintentar</Text>
+            </Pressable>
+          </View>
+        )}
 
         {/* Listado de Equipos */}
         <View style={styles.sectionHeader}>
@@ -209,23 +230,21 @@ export default function TeamsScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#101114" },
-  container: { flexGrow: 1, padding: 18, paddingTop: 20, paddingBottom: 36 },
-  back: { color: "#E53935", fontSize: 14, fontWeight: "700", marginBottom: 18 },
-  eyebrow: { color: "#E53935", fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
-  title: { color: "#FFF", fontSize: 28, fontWeight: "900", marginTop: 4 },
-  subtitle: { color: "#A6A8AE", fontSize: 12, marginTop: 4, marginBottom: 16 },
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { ...screenContent },
+  back: { color: colors.primary, fontSize: 14, fontWeight: "700", marginBottom: 18 },
+  eyebrow: { color: colors.primary, fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
+  title: { letterSpacing: -1, color: colors.text, fontSize: 34, fontWeight: "900", marginTop: 4 },
+  subtitle: { color: colors.textMuted, fontSize: 12, marginTop: 4, marginBottom: 16 },
 
   quotaCard: {
-    backgroundColor: "#17181D",
-    borderRadius: 16,
+    ...ui.card,
     padding: 16,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
+    ...platformShadow,
     marginBottom: 16,
   },
   quotaHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  quotaTitle: { color: "#FFF", fontSize: 14, fontWeight: "800" },
+  quotaTitle: { color: colors.text, fontSize: 14, fontWeight: "800" },
   quotaBadge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -233,48 +252,42 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "900",
   },
-  quotaAvailable: { backgroundColor: "#2B2215", color: "#F1C46A" },
-  quotaFull: { backgroundColor: "#162B1F", color: "#55C77A" },
+  quotaAvailable: { backgroundColor: "#2B2215", color: colors.warning },
+  quotaFull: { backgroundColor: "#162B1F", color: colors.success },
   progressBar: {
     height: 6,
-    backgroundColor: "#2B2D35",
+    backgroundColor: colors.border,
     borderRadius: 3,
     marginVertical: 10,
     overflow: "hidden",
   },
   progressFill: {
     height: "100%",
-    backgroundColor: "#E53935",
+    backgroundColor: colors.primaryPressed,
     borderRadius: 3,
   },
-  quotaHint: { color: "#A6A8AE", fontSize: 11, lineHeight: 15 },
+  quotaHint: { color: colors.textMuted, fontSize: 11, lineHeight: 15 },
 
   sectionHeader: { marginBottom: 10 },
-  sectionTitle: { color: "#FFFFFF", fontSize: 15, fontWeight: "800" },
-  sectionSubtitle: { color: "#70737C", fontSize: 11, marginTop: 2 },
+  sectionTitle: { color: colors.text, fontSize: 15, fontWeight: "800" },
+  sectionSubtitle: { color: colors.textSubtle, fontSize: 11, marginTop: 2 },
 
   emptyCard: {
-    backgroundColor: "#17181D",
-    borderRadius: 16,
+    ...ui.card,
     padding: 24,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#2B2D35",
     marginBottom: 16,
   },
   emptyIcon: { fontSize: 32, marginBottom: 8 },
-  emptyTitle: { color: "#FFF", fontSize: 15, fontWeight: "800" },
-  emptyText: { color: "#A6A8AE", fontSize: 11, textAlign: "center", marginTop: 4, lineHeight: 16 },
+  emptyTitle: { color: colors.text, fontSize: 15, fontWeight: "800" },
+  emptyText: { color: colors.textMuted, fontSize: 11, textAlign: "center", marginTop: 4, lineHeight: 16 },
 
   teamCard: {
+    ...ui.card,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#1C1E23",
-    borderRadius: 14,
     padding: 12,
     marginBottom: 8,
-    borderWidth: 1,
-    borderColor: "#2B2D35",
   },
   teamAvatar: {
     width: 44,
@@ -283,13 +296,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  avatarGroupA: { backgroundColor: "#E53935" },
-  avatarGroupB: { backgroundColor: "#1E88E5" },
+  avatarGroupA: { backgroundColor: colors.primaryPressed },
+  avatarGroupB: { backgroundColor: colors.groupB },
   avatarNoGroup: { backgroundColor: "#3A3D47" },
-  avatarText: { color: "#FFF", fontSize: 18, fontWeight: "900" },
+  avatarText: { color: colors.text, fontSize: 18, fontWeight: "900" },
 
   teamDetails: { flex: 1, marginLeft: 12 },
-  teamName: { color: "#FFF", fontSize: 14, fontWeight: "800" },
+  teamName: { color: colors.text, fontSize: 14, fontWeight: "800" },
   badgesRow: { flexDirection: "row", gap: 6, marginTop: 4 },
   groupTag: {
     paddingHorizontal: 6,
@@ -298,11 +311,11 @@ const styles = StyleSheet.create({
   },
   groupTagA: { backgroundColor: "#2A181A" },
   groupTagB: { backgroundColor: "#152433" },
-  groupTagNone: { backgroundColor: "#2B2D35" },
+  groupTagNone: { backgroundColor: colors.border },
   groupTagText: { fontSize: 10, fontWeight: "800" },
-  groupTagTextA: { color: "#FF8D8D" },
+  groupTagTextA: { color: colors.dangerText },
   groupTagTextB: { color: "#81D4FA" },
-  groupTagTextNone: { color: "#70737C" },
+  groupTagTextNone: { color: colors.textSubtle },
 
   payTag: {
     fontSize: 10,
@@ -311,19 +324,17 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 4,
   },
-  payTagPaid: { backgroundColor: "#162B1F", color: "#55C77A" },
-  payTagPending: { backgroundColor: "#2B2215", color: "#F1C46A" },
+  payTagPaid: { backgroundColor: "#162B1F", color: colors.success },
+  payTagPending: { backgroundColor: "#2B2215", color: colors.warning },
 
-  chevron: { color: "#70737C", fontSize: 24, marginLeft: 8 },
+  chevron: { color: colors.textSubtle, fontSize: 24, marginLeft: 8 },
 
   primaryButton: {
-    backgroundColor: "#E53935",
-    borderRadius: 14,
+    ...ui.button, backgroundColor: colors.primaryPressed,
     padding: 16,
-    alignItems: "center",
     marginTop: 10,
   },
-  primaryButtonText: { color: "#FFF", fontSize: 14, fontWeight: "800" },
+  primaryButtonText: { color: colors.text, fontSize: 14, fontWeight: "800" },
   fullNotice: {
     backgroundColor: "#162B1F",
     borderRadius: 12,
@@ -332,6 +343,21 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   fullNoticeText: { color: "#81C784", fontSize: 11, fontWeight: "700" },
-  errorText: { color: "#FF8D8D", fontSize: 12, marginBottom: 12, textAlign: "center" },
+  errorCard: {
+    backgroundColor: "#2A181A",
+    borderColor: "#7A2E32",
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 14,
+    padding: 12,
+  },
+  errorText: { color: colors.dangerText, fontSize: 12, marginBottom: 8 },
+  retryButton: {
+    ...ui.button,
+    alignSelf: "flex-start",
+    backgroundColor: colors.surfaceRaised,
+    paddingHorizontal: 14,
+  },
+  retryButtonText: { color: colors.text, fontSize: 12, fontWeight: "800" },
   pressed: { opacity: 0.72 },
 });
